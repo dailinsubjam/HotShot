@@ -317,15 +317,6 @@ impl BlockContents<H_256> for DEntryBlock {
         let x = *blake3::hash(bytes).as_bytes();
         x.into()
     }
-
-    fn set_user_key(&self, _user_pub_key: &Self::LedgerUserKey) -> () {
-        //does nothing in this demo
-    }
-
-    fn set_fee_blind(&self, _fee_blind: &Self::LedgerBlindFactor) -> () {
-        //does nothing in this demo
-    }
-
 }
 
 /// The node implementation for the dentry demo
