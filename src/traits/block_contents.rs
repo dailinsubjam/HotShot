@@ -36,6 +36,23 @@ pub trait BlockContents<const N: usize>:
         + Sync
         + Send;
 
+
+    /// Associated type for user key; required for fee validation
+    type LedgerUserKey: Clone
+        + Serialize
+        + DeserializeOwned
+        + Debug
+        + Sync
+        + Send;
+
+    /// Associated type for fee blind: required for fee validation
+    type LedgerBlindFactor: Clone
+    + Serialize
+    + DeserializeOwned
+    + Debug
+    + Sync
+    + Send;
+
     /// Attempts to add a transaction, returning an Error if it would result in a structurally
     /// invalid block
     ///
@@ -55,6 +72,15 @@ pub trait BlockContents<const N: usize>:
     ///
     /// Used to produce hashes for internal [`PhaseLock`](crate::PhaseLock) control structures
     fn hash_bytes(bytes: &[u8]) -> BlockHash<N>;
+    ///
+    ///
+    ///set block user key for fee validation
+    fn set_user_key(&self, user_pub_key: &Self::LedgerUserKey) -> ();
+    ///
+    ///
+    ///set blind factor for fee validation
+    fn set_fee_blind(&self, fee_blind: &Self::LedgerBlindFactor) -> ();
+
 }
 
 /// Dummy implementation of `BlockContents` for unit tests
@@ -100,6 +126,10 @@ pub mod dummy {
 
         type Transaction = ();
 
+        type LedgerUserKey = ();
+
+        type LedgerBlindFactor = ();
+
         fn add_transaction_raw(
             &self,
             _tx: &Self::Transaction,
@@ -125,6 +155,12 @@ pub mod dummy {
             hasher.update(bytes);
             let x = *hasher.finalize().as_bytes();
             x.into()
+        }
+
+        fn set_user_key(&self, _user_pub_key: &Self::LedgerUserKey) -> () {
+        }
+
+        fn set_fee_blind(&self, _fee_blind: &Self::LedgerUserKey) -> () {
         }
     }
 }
