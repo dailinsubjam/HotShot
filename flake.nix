@@ -16,11 +16,16 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    zig.url = "github:arqv/zig-overlay";
   };
 
-  outputs = { self, nixpkgs, flake-compat, utils, crate2nix, fenix }:
+  outputs = { self, nixpkgs, flake-compat, utils, crate2nix, fenix, zig}:
     utils.lib.eachDefaultSystem (system:
       let
+        macos_sdk = builtins.fetchTarball {
+          url = "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.3.sdk.tar.xz";
+          sha256 = "sha256-BoFWhRSHaD0j3dzDOFtGJ6DiRrdzMJhkjxztxCluFKo=";
+        };
         fenixStable = fenix.packages.${system}.stable.withComponents [ "cargo" "clippy" "rust-src" "rustc" "rustfmt" "llvm-tools-preview" ];
         # needed for compiling static binary
         fenixMusl = with fenix.packages.${system}; combine [ (stable.withComponents [ "cargo" "clippy" "rustc" "rustfmt" ]) targets.x86_64-unknown-linux-musl.stable.rust-std ];
@@ -33,6 +38,7 @@
           };
 
         pkgs = import nixpkgs {
+          config.allowBroken = true;
           inherit system;
           overlays = [
             rustOverlay
@@ -93,6 +99,13 @@
               };
             };
           };
+          zig_cc =
+# -F${pkgs.darwin.apple_sdk.frameworks.Security}/Library/Frameworks -F${pkgs.darwin.apple_sdk.frameworks.SystemConfiguration}/Library/Frameworks -F${pkgs.darwin.apple_sdk.frameworks.System}/Library/Frameworks -F${pkgs.darwin.apple_sdk.frameworks.CoreFoundation}/Library/Frameworks
+            pkgs.writeScriptBin "zig_cc" ''
+              #!/usr/bin/env bash
+              ${zig.packages.aarch64-darwin."0.9.1"}/bin/zig cc -target aarch64-macos.11 -L${pkgs.libiconv}/lib -F${macos_sdk}/System/Library/Frameworks -Wl,-undefined=dynamic_lookup $@
+            '';
+
 
 
         # TODO uncomment when fetching dependencies is unborked
@@ -110,17 +123,41 @@
           zlib.out
           fenix.packages.${system}.rust-analyzer
 
-        ] ++ lib.optionals stdenv.isDarwin [ darwin.apple_sdk.frameworks.Security pkgs.libiconv darwin.apple_sdk.frameworks.SystemConfiguration ];
+        ] ++ lib.optionals stdenv.isDarwin [ darwin.apple_sdk.frameworks.Security pkgs.libiconv darwin.apple_sdk.frameworks.SystemConfiguration darwin.apple_sdk.frameworks.System];
 
       in
       {
         devShell = pkgs.mkShell {
+          #ZIG_GLOBAL_CACHE_DIR = "";
+          CC = "${zig_cc}/bin/zig_cc";
+          RUSTFLAGS = "-Clinker=${zig_cc}/bin/zig_cc ";
+          shellHook = ''
+                export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d)
+          '';
           buildInputs =
-            with pkgs; [ fenixStable ] ++ buildDeps;
+            with pkgs; [ fenixStable zld zig_cc] ++ buildDeps;
         };
 
 
         devShells = {
+          zigldShell = pkgs.mkShell {
+            CC = "${zig_cc}/bin/zig_cc";
+            RUSTFLAGS = "-Clinker=${zig_cc}/bin/zig_cc ";
+            shellHook = ''
+                  export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d)
+            '';
+            buildInputs =
+              with pkgs; [ fenixStable zig_cc] ++ buildDeps;
+          };
+          zldShell = pkgs.mkShell {
+            RUSTFLAGS = "-Clink-arg=-fuse-ld=${pkgs.zld}/bin/zld";
+            buildInputs =
+              with pkgs; [ fenixStable zld] ++ buildDeps;
+          };
+
+
+
+
           # usage: compile a statically linked musl binary
           staticShell = pkgs.mkShell {
             shellHook = ''
@@ -134,7 +171,7 @@
 
           # usage: evaluate performance (grcov + flamegraph)
           perfShell = pkgs.mkShell {
-            buildInputs = with pkgs; [ flamegraph fd cargo-llvm-cov fenixStable ] ++ buildDeps;
+            buildInputs = with pkgs; [ flamegraph fd cargo-llvm-cov fenixStable zld sccache] ++ buildDeps;
           };
 
         };
