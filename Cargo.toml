@@ -80,4 +80,5 @@ members = [
         "phaselock-testing",
         "phaselock-types",
         "phaselock-utils",
+        "phaselock-plots",
 ]
