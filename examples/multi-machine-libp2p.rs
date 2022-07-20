@@ -170,12 +170,12 @@ async fn init_state_and_hotshot(
         threshold: NonZeroUsize::new(threshold).unwrap(),
         max_transactions: NonZeroUsize::new(100).unwrap(),
         known_nodes: known_nodes.clone(),
-        next_view_timeout: 1000,
+        next_view_timeout: 10000,
         timeout_ratio: (11, 10),
         round_start_delay: 1,
         start_delay: 1,
         propose_min_round_time: Duration::from_millis(0),
-        propose_max_round_time: Duration::from_millis(1000),
+        propose_max_round_time: Duration::from_millis(10000),
         num_bootstrap: 7,
     };
     debug!(?config);
