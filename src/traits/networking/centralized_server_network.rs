@@ -11,7 +11,7 @@ cfg_if::cfg_if! {
         std::compile_error!{"Either feature \"async-std-executor\" or feature \"tokio-executor\" must be enabled for this crate."}
     }
 }
-use async_lock::{RwLock, RwLockUpgradableReadGuard};
+use async_lock::RwLock;
 use async_trait::async_trait;
 use bincode::Options;
 use flume::{Receiver, Sender};
@@ -52,6 +52,8 @@ use tracing::error;
 /// The inner state of the `CentralizedServerNetwork`
 #[derive(Debug)]
 struct Inner<K: SignatureKey> {
+    /// For logging purposes
+    own_id: u64,
     /// Self-identifying public key
     own_key: K,
     /// List of all known nodes
@@ -127,6 +129,11 @@ impl<K: SignatureKey> Inner<K> {
     /// Send a direct message to the server.
     async fn direct_message(&self, target: K, message: Vec<u8>) {
         if target == self.own_key {
+            tracing::debug!(
+                "id={} sending direct message as loopback to self, size: {} bytes",
+                self.own_id,
+                message.len()
+            );
             self.receiving_loopback.send_async((
                 FromServer::Direct {
                     source: self.own_key.clone(),
@@ -175,21 +182,26 @@ impl<K: SignatureKey> Inner<K> {
         ) -> MsgStepOutcome<RET>,
         FAIL: FnOnce(usize, &mut HashMap<K, MsgStepContext>) -> RET,
     {
-        let incoming_queue = self.incoming_queue.upgradable_read().await;
+        tracing::debug!("id={} remove_next_message_from_queue", self.own_id);
+        let mut incoming_queue = self.incoming_queue.write().await;
         let mut context_map: HashMap<K, MsgStepContext> = HashMap::new();
         // pop all messages from the incoming stream, push them onto `result` if they match `c`, else push them onto our `lock`
         let temp_start_index = incoming_queue.len();
         for (i, msg) in incoming_queue.iter().enumerate() {
+            tracing::debug!(
+                "id={} checking {:?} from incoming_queue",
+                self.own_id,
+                msg.0
+            );
             match c(msg, i, &mut context_map) {
                 MsgStepOutcome::Skip | MsgStepOutcome::Begin | MsgStepOutcome::Continue => {
+                    tracing::debug!("id={} continuing from msg", self.own_id);
                     continue;
                 }
                 MsgStepOutcome::Complete(indexes, ret) => {
-                    let mut incoming_queue_mutation =
-                        RwLockUpgradableReadGuard::upgrade(incoming_queue).await;
-
-                    let incoming_queue = std::mem::take(&mut *incoming_queue_mutation);
-                    *incoming_queue_mutation = incoming_queue
+                    tracing::debug!("id={} completed next msg", self.own_id);
+                    let incoming_queue_tmp = std::mem::take(&mut *incoming_queue);
+                    *incoming_queue = incoming_queue_tmp
                         .into_iter()
                         .enumerate()
                         .filter_map(|(i, msg)| {
@@ -207,22 +219,22 @@ impl<K: SignatureKey> Inner<K> {
         }
         let mut temp_queue = Vec::new();
         for (i, msg) in itertools::iterate(temp_start_index, |i| i + 1).zip(self.receiving.iter()) {
+            tracing::debug!("id={} pulled {:?} from receiving", self.own_id, msg.0);
             match c(&msg, i, &mut context_map) {
                 MsgStepOutcome::Skip | MsgStepOutcome::Begin | MsgStepOutcome::Continue => {
+                    tracing::debug!("id={} putting msg in temp_queue", self.own_id);
                     temp_queue.push(msg);
                     continue;
                 }
                 MsgStepOutcome::Complete(indexes, ret) => {
+                    tracing::debug!("id={} completed next message", self.own_id);
                     // no queued messages taken,
                     // all received messages taken (including this one)
                     let unchanged = indexes.iter().peekable().peek() == Some(&&temp_start_index)
                         && indexes.len() == temp_queue.len() + 1;
                     if !unchanged {
-                        let mut incoming_queue_mutation =
-                            RwLockUpgradableReadGuard::upgrade(incoming_queue).await;
-
-                        let incoming_queue = std::mem::take(&mut *incoming_queue_mutation);
-                        *incoming_queue_mutation = incoming_queue
+                        let incoming_queue_tmp = std::mem::take(&mut *incoming_queue);
+                        *incoming_queue = incoming_queue_tmp
                             .into_iter()
                             .chain(temp_queue)
                             .enumerate()
@@ -235,15 +247,18 @@ impl<K: SignatureKey> Inner<K> {
                             })
                             .collect::<Vec<_>>();
                     }
-
+                    tracing::debug!(
+                        "id={} returning message with incoming_queue length {}",
+                        self.own_id,
+                        incoming_queue.len()
+                    );
                     return ret;
                 }
             }
         }
-        let mut incoming_queue_mutation = RwLockUpgradableReadGuard::upgrade(incoming_queue).await;
-        incoming_queue_mutation.append(&mut temp_queue);
+        incoming_queue.append(&mut temp_queue);
         tracing::error!("Could not receive message from centralized server queue");
-        f(incoming_queue_mutation.len(), &mut context_map)
+        f(incoming_queue.len(), &mut context_map)
     }
 
     /// Remove all messages from the internal queue, and then the internal receiving channel, if the given `c` method returns `Some(RET)` on that entry.
@@ -257,50 +272,99 @@ impl<K: SignatureKey> Inner<K> {
             &mut HashMap<K, MsgStepContext>,
         ) -> MsgStepOutcome<RET>,
     {
-        let incoming_queue = self.incoming_queue.upgradable_read().await;
+        let mut incoming_queue = self.incoming_queue.write().await;
+        tracing::debug!(
+            "id={} remove_messages_from_queue, initial incoming_queue length: {}",
+            self.own_id,
+            incoming_queue.len()
+        );
+
         let mut result = Vec::new();
         let mut context_map: HashMap<K, MsgStepContext> = HashMap::new();
         // pop all messages from the incoming stream, push them onto `result` if they match `c`, else push them onto our `lock`
-        let temp_queue: Vec<_> = self.receiving.drain().collect();
+
+        let temp_start_index = incoming_queue.len();
         let mut dead_indexes = BTreeSet::new();
 
         incoming_queue
             .iter()
-            .chain(temp_queue.iter())
             .enumerate()
             .for_each(|(i, msg)| match c(msg, i, &mut context_map) {
-                MsgStepOutcome::Skip | MsgStepOutcome::Begin | MsgStepOutcome::Continue => {}
+                MsgStepOutcome::Skip | MsgStepOutcome::Begin | MsgStepOutcome::Continue => {
+                    tracing::debug!("id={} checking msg {i}: {:?}", self.own_id, msg.0);
+                }
                 MsgStepOutcome::Complete(mut indexes, ret) => {
+                    tracing::debug!(
+                        "id={} consuming {:?} with msg {i}: {:?}",
+                        self.own_id,
+                        indexes,
+                        msg.0
+                    );
+
                     dead_indexes.append(&mut indexes);
                     result.push(ret);
                 }
             });
+        let mut temp_queue = Vec::new();
+        let mut i = temp_start_index;
+        while let Ok(msg) = self.receiving.try_recv() {
+            match c(&msg, i, &mut context_map) {
+                MsgStepOutcome::Skip | MsgStepOutcome::Begin | MsgStepOutcome::Continue => {
+                    tracing::debug!("id={} checking msg {i}: {:?}", self.own_id, msg.0);
+                }
+                MsgStepOutcome::Complete(mut indexes, ret) => {
+                    tracing::debug!(
+                        "id={} consuming {:?} with msg {i}: {:?}",
+                        self.own_id,
+                        indexes,
+                        msg.0
+                    );
+                    dead_indexes.append(&mut indexes);
+                    result.push(ret);
+                }
+            }
+            tracing::debug!("id={} putting msg in temp_queue", self.own_id);
+            temp_queue.push(msg);
+            i += 1;
+        }
 
         // (nothing taken && no new messages received)
         // || (no queued messages taken
         //   && all received messages taken)
+        tracing::debug!(
+            "id={} consumed {:?}, temp length is {}",
+            self.own_id,
+            dead_indexes,
+            temp_queue.len()
+        );
+
         let unchanged = (dead_indexes.is_empty() && temp_queue.is_empty())
-            || (dead_indexes.iter().peekable().peek() == Some(&&incoming_queue.len())
+            || (dead_indexes.iter().peekable().peek() == Some(&&temp_start_index)
                 && dead_indexes.len() == temp_queue.len());
 
         if !unchanged {
-            let mut incoming_queue_mutation =
-                RwLockUpgradableReadGuard::upgrade(incoming_queue).await;
-
-            let incoming_queue = std::mem::take(&mut *incoming_queue_mutation);
-            *incoming_queue_mutation = incoming_queue
+            let incoming_queue_tmp = std::mem::take(&mut *incoming_queue);
+            *incoming_queue = incoming_queue_tmp
                 .into_iter()
                 .chain(temp_queue)
                 .enumerate()
                 .filter_map(|(i, msg)| {
                     if dead_indexes.contains(&i) {
+                        tracing::debug!("id={} consumed message {i}, msg={:?}", self.own_id, msg.0);
                         None
                     } else {
+                        tracing::debug!("id={} keeping message {i}, msg={:?}", self.own_id, msg.0);
                         Some(msg)
                     }
                 })
                 .collect();
         }
+        tracing::debug!(
+            "id={} completed with {} messages, incoming_queue length {}",
+            self.own_id,
+            result.len(),
+            incoming_queue.len()
+        );
         result
     }
 
@@ -308,6 +372,7 @@ impl<K: SignatureKey> Inner<K> {
     async fn get_broadcasts<M: Serialize + DeserializeOwned + Send + Sync + Clone + 'static>(
         &self,
     ) -> Vec<Result<M, bincode::Error>> {
+        let own_id = self.own_id;
         self.remove_messages_from_queue(|msg, index, context_map| {
             match msg {
                 (FromServer::Broadcast {
@@ -327,13 +392,13 @@ impl<K: SignatureKey> Inner<K> {
                             });
 
                             if prev.is_some() {
-                                tracing::error!(?source, "FromServer::Broadcast encountered, incomplete prior Broadcast from same source");
+                                tracing::error!(?source, "id={own_id} FromServer::Broadcast encountered, incomplete prior Broadcast from same source");
                             }
 
                             MsgStepOutcome::Begin
                         },
                         cmp::Ordering::Greater => {
-                            tracing::error!("FromServer::Broadcast with message_len {message_len}b, payload is {}b", payload.len());
+                            tracing::error!("id={own_id} FromServer::Broadcast with message_len {message_len}b, payload is {}b", payload.len());
                             MsgStepOutcome::Skip
                         },
                         cmp::Ordering::Equal => MsgStepOutcome::Complete(consumed_indexes, bincode_opts().deserialize(payload)),
@@ -351,7 +416,7 @@ impl<K: SignatureKey> Inner<K> {
                                 cmp::Ordering::Less => MsgStepOutcome::Continue,
                                 cmp::Ordering::Greater => {
                                     let (_, context) = context.remove_entry();
-                                    tracing::error!("FromServer::Broadcast with message_len {}b, accumulated payload with {}b",context.message_len, context.accumulated_stream.len());
+                                    tracing::error!("id={own_id} FromServer::Broadcast with message_len {}b, accumulated payload with {}b",context.message_len, context.accumulated_stream.len());
                                     MsgStepOutcome::Skip
                                 }
                                 cmp::Ordering::Equal => {
@@ -361,7 +426,7 @@ impl<K: SignatureKey> Inner<K> {
                             }
                         }
                     } else {
-                        tracing::error!("FromServer::BroadcastPayload found, but no incomplete FromServer::Broadcast exists");
+                        tracing::error!("id={own_id} FromServer::BroadcastPayload found, but no incomplete FromServer::Broadcast exists");
                         MsgStepOutcome::Skip
                     }
                 },
@@ -375,6 +440,7 @@ impl<K: SignatureKey> Inner<K> {
     async fn get_next_broadcast<M: Serialize + DeserializeOwned + Send + Sync + Clone + 'static>(
         &self,
     ) -> Result<M, NetworkError> {
+        let own_id = self.own_id;
         self.remove_next_message_from_queue(|msg, index, context_map| {
             match msg {
                 (FromServer::Broadcast {
@@ -394,14 +460,14 @@ impl<K: SignatureKey> Inner<K> {
                             });
 
                             if prev.is_some() {
-                                tracing::error!(?source, "FromServer::Broadcast encountered, incomplete prior Broadcast from same source");
+                                tracing::error!(?source, "id={own_id} FromServer::Broadcast encountered, incomplete prior Broadcast from same source");
 
                             }
 
                             MsgStepOutcome::Begin
                         },
                         cmp::Ordering::Greater => {
-                            tracing::error!("FromServer::Broadcast with message_len {message_len}b, payload is {}b", payload.len());
+                            tracing::error!("id={own_id} FromServer::Broadcast with message_len {message_len}b, payload is {}b", payload.len());
                             MsgStepOutcome::Skip
                         },
                         cmp::Ordering::Equal => MsgStepOutcome::Complete(consumed_indexes, bincode_opts().deserialize(payload).context(FailedToDeserializeSnafu)),
@@ -419,7 +485,7 @@ impl<K: SignatureKey> Inner<K> {
                                 cmp::Ordering::Less => MsgStepOutcome::Continue,
                                 cmp::Ordering::Greater => {
                                     let (_, context) = context.remove_entry();
-                                    tracing::error!("FromServer::Broadcast with message_len {}b, accumulated payload with {}b", context.message_len, context.accumulated_stream.len());
+                                    tracing::error!("id={own_id} FromServer::Broadcast with message_len {}b, accumulated payload with {}b", context.message_len, context.accumulated_stream.len());
                                     MsgStepOutcome::Skip
                                 }
                                 cmp::Ordering::Equal => {
@@ -429,7 +495,7 @@ impl<K: SignatureKey> Inner<K> {
                         }
                         }
                     } else {
-                        tracing::error!("FromServer::BroadcastPayload found, but no incomplete FromServer::Broadcast exists");
+                        tracing::error!("id={own_id} FromServer::BroadcastPayload found, but no incomplete FromServer::Broadcast exists");
                         MsgStepOutcome::Skip
                     }
                 },
@@ -449,6 +515,7 @@ impl<K: SignatureKey> Inner<K> {
     >(
         &self,
     ) -> Vec<Result<M, bincode::Error>> {
+        let own_id = self.own_id;
         self.remove_messages_from_queue(|msg, index, context_map| {
             match msg {
                 (FromServer::Direct {
@@ -468,13 +535,13 @@ impl<K: SignatureKey> Inner<K> {
                             });
 
                             if prev.is_some() {
-                                tracing::error!(?source, "FromServer::Direct encountered, incomplete prior Direct from same source");
+                                tracing::error!(?source, "id={own_id} FromServer::Direct encountered, incomplete prior Direct from same source");
                             }
 
                             MsgStepOutcome::Begin
                         },
                         cmp::Ordering::Greater => {
-                            tracing::error!("FromServer::Direct with message_len {message_len}b, payload is {}b", payload.len());
+                            tracing::error!("id={own_id} FromServer::Direct with message_len {message_len}b, payload is {}b", payload.len());
                             MsgStepOutcome::Skip
                         },
                         cmp::Ordering::Equal => {
@@ -495,7 +562,7 @@ impl<K: SignatureKey> Inner<K> {
                                 MsgStepOutcome::Continue
                                 }
                                 cmp::Ordering::Greater => {
-                                tracing::error!("FromServer::Broadcast with message_len {}b, accumulated payload with {}b",context.get().message_len, context.get().accumulated_stream.len());
+                                tracing::error!("id={own_id} FromServer::Direct with message_len {}b, accumulated payload with {}b",context.get().message_len, context.get().accumulated_stream.len());
                                 context.remove_entry();
                                 MsgStepOutcome::Skip
                                 }
@@ -506,7 +573,7 @@ impl<K: SignatureKey> Inner<K> {
                         }
                         }
                     } else {
-                        tracing::error!("FromServer::BroadcastPayload found, but no incomplete FromServer::Broadcast exists");
+                        tracing::error!("id={own_id} FromServer::DirectPayload found, but no incomplete FromServer::Direct exists");
                         MsgStepOutcome::Skip
                     }
                 },
@@ -522,6 +589,7 @@ impl<K: SignatureKey> Inner<K> {
     >(
         &self,
     ) -> Result<M, NetworkError> {
+        let own_id = self.own_id;
         self.remove_next_message_from_queue(|msg, index, context_map| {
             match msg {
                 (FromServer::Direct {
@@ -541,13 +609,13 @@ impl<K: SignatureKey> Inner<K> {
                             });
 
                             if prev.is_some() {
-                                tracing::error!(?source, "FromServer::Direct encountered, incomplete prior Direct from same source");
+                                tracing::error!(?source, "id={own_id} FromServer::Direct encountered, incomplete prior Direct from same source");
                             }
 
                             MsgStepOutcome::Begin
                         },
                         cmp::Ordering::Greater => {
-                            tracing::error!("FromServer::Direct with message_len {message_len}b, payload is {}b", payload.len());
+                            tracing::error!("id={own_id} FromServer::Direct with message_len {message_len}b, payload is {}b", payload.len());
                             MsgStepOutcome::Skip
                         },
                         cmp::Ordering::Equal => {
@@ -569,7 +637,7 @@ impl<K: SignatureKey> Inner<K> {
                                 }
                                 cmp::Ordering::Greater => {
                                 let (_, context) = context.remove_entry();
-                                tracing::error!("FromServer::Broadcast with message_len {}b, accumulated payload with {}b", context.message_len, context.accumulated_stream.len());
+                                tracing::error!("id={own_id} FromServer::Direct with message_len {}b, accumulated payload with {}b", context.message_len, context.accumulated_stream.len());
                                 MsgStepOutcome::Skip
                                 }
                                 cmp::Ordering::Equal => {
@@ -579,7 +647,7 @@ impl<K: SignatureKey> Inner<K> {
                         }
                         }
                     } else {
-                        tracing::error!("FromServer::BroadcastPayload found, but no incomplete FromServer::Broadcast exists");
+                        tracing::error!("id={own_id} FromServer::DirectPayload found, but no incomplete FromServer::Direct exists");
                         MsgStepOutcome::Skip
                     }
                 },
@@ -652,7 +720,8 @@ impl CentralizedServerNetwork<Ed25519Pub> {
             }
             match recv_stream.recv().await {
                 Ok(FromServer::Config { config, run }) => {
-                    break ((recv_stream, send_stream), run, config)
+                    tracing::debug!("received Config from server id={}", config.node_index);
+                    break ((recv_stream, send_stream), run, config);
                 }
                 x => {
                     error!("Expected config from server, got {:?}", x);
@@ -671,10 +740,10 @@ impl CentralizedServerNetwork<Ed25519Pub> {
         let result = Self::create(
             known_nodes,
             move || {
-                let streams = streams.take();
+                let stream = streams.take();
                 async move {
-                    if let Some(streams) = streams {
-                        streams
+                    if let Some(stream) = stream {
+                        stream
                     } else {
                         Self::connect_to(addr).await
                     }
@@ -682,6 +751,7 @@ impl CentralizedServerNetwork<Ed25519Pub> {
                 .boxed()
             },
             key,
+            config.node_index,
         );
         (config, run, result)
     }
@@ -731,14 +801,14 @@ impl<K: SignatureKey + 'static> CentralizedServerNetwork<K> {
         .boxed()
     }
     /// Connect to a centralized server
-    pub fn connect(known_nodes: Vec<K>, addr: SocketAddr, key: K) -> Self {
-        Self::create(known_nodes, move || Self::connect_to(addr), key)
+    pub fn connect(known_nodes: Vec<K>, addr: SocketAddr, key: K, id: u64) -> Self {
+        Self::create(known_nodes, move || Self::connect_to(addr), key, id)
     }
 
     /// Create a `CentralizedServerNetwork`. Every time a new TCP connection is needed, `create_connection` is called.
     ///
     /// This will auto-reconnect when the network loses connection to the server.
-    fn create<F>(known_nodes: Vec<K>, mut create_connection: F, key: K) -> Self
+    fn create<F>(known_nodes: Vec<K>, mut create_connection: F, key: K, id: u64) -> Self
     where
         F: FnMut() -> BoxFuture<'static, (TcpStreamRecvUtil, TcpStreamSendUtil)> + Send + 'static,
     {
@@ -747,6 +817,7 @@ impl<K: SignatureKey + 'static> CentralizedServerNetwork<K> {
         let receiving_loopback = from_background_sender.clone();
 
         let inner = Arc::new(Inner {
+            own_id: id,
             own_key: key.clone(),
             connected: AtomicBool::new(false),
             running: AtomicBool::new(true),
@@ -827,8 +898,8 @@ async fn run_background<K: SignatureKey>(
         send_stream.send(ToServer::<K>::RequestClientCount).await?;
     }
 
-    let send_handle = run_background_send(send_stream, to_background);
-    let recv_handle = run_background_recv(recv_stream, from_background_sender, connection);
+    let send_handle = run_background_send(send_stream, to_background, connection.clone());
+    let recv_handle = run_background_recv(recv_stream, from_background_sender, connection.clone());
 
     futures::future::try_join(send_handle, recv_handle)
         .await
@@ -841,28 +912,43 @@ async fn run_background<K: SignatureKey>(
 async fn run_background_send<K: SignatureKey>(
     mut stream: TcpStreamSendUtil,
     to_background: Receiver<((ToServer<K>, Vec<u8>), Option<Sender<()>>)>,
+    connection: Arc<Inner<K>>,
 ) -> Result<(), Error> {
     loop {
         let result = to_background.recv_async().await;
-        let (msg, confirm) = result.map_err(|_| Error::FailedToSend)?;
+        let (msg, confirm) = result.map_err(|e| {
+            tracing::error!(?e, "id={} error on flume recv", connection.own_id);
+            Error::FailedToSend
+        })?;
         let (header, payload) = msg;
         let expect_payload = &header.payload_len();
         if let Some(payload_expected_len) = *expect_payload {
             if payload.len() != <NonZeroUsize as Into<usize>>::into(payload_expected_len) {
                 tracing::warn!(
                     ?header,
-                    "expected payload of {payload_expected_len} bytes, got {} bytes",
+                    "expected payload of {payload_expected_len} bytes, got {} bytes; id={}",
                     payload.len(),
+                    connection.own_id
                 );
             }
         }
+        tracing::debug!(?header, "id={} send to server", connection.own_id);
         stream.send(header).await?;
+        tracing::debug!("id={} sent to server", connection.own_id);
         if !payload.is_empty() {
+            tracing::debug!(
+                "id={} send payload to server, len={} bytes",
+                connection.own_id,
+                payload.len()
+            );
             stream.send_raw(&payload, payload.len()).await?;
+            tracing::debug!("id={} sent payload to server", connection.own_id);
         }
 
         if let Some(confirm) = confirm {
-            let _ = confirm.send_async(()).await;
+            tracing::debug!("id={} sent confirm to channel", connection.own_id);
+            let res = confirm.send_async(()).await;
+            tracing::debug!(?res, "id={} confirm result", connection.own_id);
         }
     }
 }
@@ -875,38 +961,73 @@ async fn run_background_recv<K: SignatureKey>(
     from_background_sender: Sender<(FromServer<K>, Vec<u8>)>,
     connection: Arc<Inner<K>>,
 ) -> Result<(), Error> {
+    let own_id = connection.own_id;
     loop {
-        let msg = stream.recv().await?;
+        let res = stream.recv().await;
+        if let Err(e) = &res {
+            tracing::error!(?e, "id={own_id} got error on recv() from server");
+        }
+        let msg = res?;
+        tracing::debug!(?msg, "id={own_id} got message from server");
         match msg {
             x @ (FromServer::NodeConnected { .. } | FromServer::NodeDisconnected { .. }) => {
+                tracing::debug!("id={own_id} sending {:?}to background", x);
                 from_background_sender
                     .send_async((x, Vec::new()))
                     .await
-                    .map_err(|_| Error::FailedToReceive)?;
+                    .map_err(|e| {
+                        tracing::error!(?e, "id={own_id} error on flume send");
+                        Error::FailedToReceive
+                    })?;
+                tracing::debug!("id={own_id} sent to background");
             }
 
             x @ (FromServer::Broadcast { .. } | FromServer::Direct { .. }) => {
                 let payload = if let Some(payload_len) = x.payload_len() {
-                    stream.recv_raw_all(payload_len.into()).await?
+                    tracing::debug!("id={own_id} getting {payload_len} byte payload from server");
+                    let res = stream.recv_raw_all(payload_len.into()).await?;
+                    tracing::debug!("id={own_id} got {payload_len} byte payload from server");
+                    res
                 } else {
                     Vec::new()
                 };
+                tracing::debug!(
+                    "id={own_id} sending {:?} and {} byte payload to background",
+                    x,
+                    payload.len()
+                );
                 from_background_sender
                     .send_async((x, payload))
                     .await
-                    .map_err(|_| Error::FailedToReceive)?;
+                    .map_err(|e| {
+                        tracing::error!(?e, "id={own_id} error on flume send");
+                        Error::FailedToReceive
+                    })?;
+                tracing::debug!("id={own_id} sent to background");
             }
 
             x @ (FromServer::BroadcastPayload { .. } | FromServer::DirectPayload { .. }) => {
                 let payload = if let Some(payload_len) = x.payload_len() {
-                    stream.recv_raw_all(payload_len.into()).await?
+                    tracing::debug!("id={own_id} getting {payload_len} byte payload from server");
+                    let res = stream.recv_raw_all(payload_len.into()).await?;
+                    tracing::debug!("id={own_id} got {payload_len} byte payload from server");
+                    res
                 } else {
                     Vec::new()
                 };
+                tracing::debug!(
+                    "id={own_id} sending {:?} and {} byte payload to background",
+                    x,
+                    payload.len()
+                );
                 from_background_sender
                     .send_async((x, payload))
                     .await
-                    .map_err(|_| Error::FailedToReceive)?;
+                    .map_err(|e| {
+                        tracing::error!(?e, "id={own_id} error on flume send");
+                        Error::FailedToReceive
+                    })?;
+                tracing::debug!("id={own_id} sent to background");
             }
 
             FromServer::ClientCount(count) => {
@@ -918,7 +1039,7 @@ async fn run_background_recv<K: SignatureKey>(
             }
 
             FromServer::Config { .. } => {
-                tracing::warn!("Received config from server but we're already running",);
+                tracing::warn!("Got config when running; id={own_id}");
             }
 
             FromServer::Start => {
@@ -967,7 +1088,7 @@ impl From<hotshot_centralized_server::Error> for Error {
 #[async_trait]
 impl<M, P> NetworkingImplementation<M, P> for CentralizedServerNetwork<P>
 where
-    M: Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
+    M: core::fmt::Debug + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     P: SignatureKey + 'static,
 {
     async fn ready(&self) -> bool {
@@ -978,6 +1099,8 @@ where
     }
 
     async fn broadcast_message(&self, message: M) -> Result<(), NetworkError> {
+        tracing::debug!("id={} wants to broadcast {:?}", self.inner.own_id, message);
+
         self.inner
             .broadcast(
                 bincode_opts()
@@ -989,6 +1112,12 @@ where
     }
 
     async fn message_node(&self, message: M, recipient: P) -> Result<(), NetworkError> {
+        tracing::debug!(
+            "id={} wants to message {:?} with {:?}",
+            self.inner.own_id,
+            recipient,
+            message
+        );
         self.inner
             .direct_message(
                 recipient,
@@ -1060,7 +1189,7 @@ where
 
 impl<M, P> TestableNetworkingImplementation<M, P> for CentralizedServerNetwork<P>
 where
-    M: Serialize + DeserializeOwned + Sync + Send + Clone + 'static,
+    M: core::fmt::Debug + Serialize + DeserializeOwned + Sync + Send + Clone + 'static,
     P: TestableSignatureKey + 'static,
 {
     fn generator(
@@ -1088,6 +1217,7 @@ where
                 known_nodes.clone(),
                 addr,
                 known_nodes[id as usize].clone(),
+                id,
             );
             network.server_shutdown_signal = Some(sender);
             network

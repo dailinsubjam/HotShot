@@ -2,7 +2,10 @@ use crate::{FromBackground, Run};
 use flume::Sender;
 use futures::FutureExt;
 use hotshot_types::traits::signature_key::{EncodedPublicKey, SignatureKey};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Display,
+};
 use tracing::debug;
 
 pub struct Clients<K: SignatureKey>(Vec<BTreeMap<OrdKey<K>, Sender<FromBackground<K>>>>);
@@ -16,9 +19,12 @@ impl<K: SignatureKey + PartialEq> Clients<K> {
         self.ensure_run_exists(run);
         let clients = &mut self.0[run.0];
         let futures = futures::future::join_all(clients.iter().map(|(id, sender)| {
-            sender
-                .send_async(msg.clone())
-                .map(move |res| (id, res.is_ok()))
+            sender.send_async(msg.clone()).map(move |res| {
+                if let Err(e) = &res {
+                    debug!(?e, "FromBackground send error for {id}");
+                }
+                (id, res.is_ok())
+            })
         }))
         .await;
         let keys_to_remove = futures
@@ -38,11 +44,12 @@ impl<K: SignatureKey + PartialEq> Clients<K> {
         let clients = &mut self.0[run.0];
         let futures = futures::future::join_all(clients.iter().filter_map(|(id, sender)| {
             if id.key != sender_key {
-                Some(
-                    sender
-                        .send_async(message.clone())
-                        .map(move |res| (id, res.is_ok())),
-                )
+                Some(sender.send_async(message.clone()).map(move |res| {
+                    if let Err(e) = &res {
+                        debug!(?e, "FromBackground send error for {id}");
+                    }
+                    (id, res.is_ok())
+                }))
             } else {
                 None
             }
@@ -66,7 +73,8 @@ impl<K: SignatureKey + PartialEq> Clients<K> {
         let clients = &mut self.0[run.0];
         let receiver = OrdKey::from(receiver);
         if let Some(sender) = clients.get_mut(&receiver) {
-            if sender.send_async(msg).await.is_err() {
+            if let Err(e) = sender.send_async(msg).await {
+                debug!(?e, "FromBackground send error for {receiver}");
                 let mut tree = BTreeSet::new();
                 tree.insert(receiver);
                 self.prune_nodes(run, tree).await;
@@ -118,7 +126,7 @@ impl<K: SignatureKey + PartialEq> Clients<K> {
     }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 struct OrdKey<K: SignatureKey> {
     key: K,
     pubkey: EncodedPublicKey,
@@ -139,5 +147,11 @@ impl<K: SignatureKey> PartialOrd for OrdKey<K> {
 impl<K: SignatureKey> Ord for OrdKey<K> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.pubkey.cmp(&other.pubkey)
+    }
+}
+
+impl<K: SignatureKey> Display for OrdKey<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.pubkey)
     }
 }

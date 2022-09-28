@@ -540,20 +540,6 @@ cfg_if::cfg_if! {
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "async-std-executor")] {
-        fn split_stream(stream: TcpStream) -> (TcpStream, TcpStream) {
-            (stream.clone(), stream)
-        }
-    } else if #[cfg(feature = "tokio-executor")] {
-        fn split_stream(stream: TcpStream) -> (OwnedReadHalf, OwnedWriteHalf) {
-            stream.into_split()
-        }
-    } else {
-        std::compile_error!{"Either feature \"async-std-executor\" or feature \"tokio-executor\" must be enabled for this crate."}
-    }
-}
-
-cfg_if::cfg_if! {
-    if #[cfg(feature = "async-std-executor")] {
         pub trait AsyncReadStream: ReadExt + Unpin + Send {}
         pub trait AsyncWriteStream: WriteExt + Unpin + Send {}
         impl<T> AsyncReadStream for T where T: ReadExt + Unpin + Send {}

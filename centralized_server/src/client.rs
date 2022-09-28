@@ -1,10 +1,10 @@
 use crate::{
-    config::ClientConfig, split_stream, Error, FromBackground, Run, TcpStreamRecvUtil,
-    TcpStreamSendUtil, TcpStreamUtilWithRecv, TcpStreamUtilWithSend, ToBackground, ToServer,
+    config::ClientConfig, Error, FromBackground, Run, TcpStreamRecvUtil, TcpStreamSendUtil,
+    TcpStreamUtilWithRecv, TcpStreamUtilWithSend, ToBackground, ToServer,
 };
 use flume::Sender;
 use hotshot_types::traits::signature_key::SignatureKey;
-use hotshot_utils::art::async_spawn;
+use hotshot_utils::art::{async_spawn, split_stream};
 use std::{net::SocketAddr, num::NonZeroUsize};
 use tracing::{debug, warn};
 
@@ -37,7 +37,11 @@ pub(crate) async fn spawn<K: SignatureKey + 'static>(
     if let (Some(key), Some(run)) = (key, run) {
         let _ = sender
             .send_async(ToBackground::ClientDisconnected { run, key })
-            .await;
+            .await
+            .map_err(|e| {
+                debug!(?e, "Client from {:?} sender had an error", addr);
+                e
+            });
     }
 }
 
@@ -57,6 +61,7 @@ async fn run_client<K: SignatureKey + 'static>(
         async move {
             while let Ok(msg) = receiver.recv_async().await {
                 let FromBackground { header, payload } = msg;
+                debug!(?header, "FromBackground received for {:?}", address);
                 let payload_len = payload.as_ref().map(|p| p.len()).unwrap_or(0);
                 if let Some(payload_expected_len) = header.payload_len() {
                     if payload_len != <NonZeroUsize as Into<usize>>::into(payload_expected_len) {
@@ -70,16 +75,24 @@ async fn run_client<K: SignatureKey + 'static>(
                     );
                     break;
                 }
+                debug!("sending {:?} to address {:?}", header, address);
                 if let Err(e) = send_stream.send(header).await {
                     debug!("Lost connection to {:?}: {:?}", address, e);
                     break;
                 }
+                debug!("sent header to address {:?}", address);
                 if let Some(payload) = payload {
                     if !payload.is_empty() {
+                        debug!(
+                            "sending payload of {} bytes to address {:?}",
+                            payload.len(),
+                            address
+                        );
                         if let Err(e) = send_stream.send_raw(&payload, payload.len()).await {
                             debug!("Lost connection to {:?}: {:?}", address, e);
                             break;
                         }
+                        debug!("sent payload to address {:?}", address);
                     }
                 }
             }
@@ -89,15 +102,23 @@ async fn run_client<K: SignatureKey + 'static>(
     // Get the network config and the run # from the background thread.
     let ClientConfig { run, config } = {
         let (sender, receiver) = flume::bounded(1);
-        let _ = to_background
+        to_background
             .send_async(ToBackground::ClientConnected {
                 addr: address,
                 sender,
             })
-            .await;
+            .await
+            .map_err(|e| {
+                debug!(?e, "client.send(ToBackground) error for ClientConnected");
+                Error::BackgroundShutdown
+            })?;
         receiver
             .recv_async()
             .await
+            .map_err(|e| {
+                debug!(?e, "client.recv_async() error for ClientConfig");
+                e
+            })
             .expect("Could not get client info from background")
     };
     // Make sure to let `spawn` know what run # we have gotten
@@ -114,12 +135,16 @@ async fn run_client<K: SignatureKey + 'static>(
             (ToServer::Identify { key }, false) => {
                 // set the key for `spawn` so we can properly disconnect
                 *parent_key = Some(key.clone());
+                debug!("{:?} associated with {:?}", key, address);
                 let sender = sender.clone();
                 // register with the background
                 to_background
                     .send_async(ToBackground::NewClient { run, key, sender })
                     .await
-                    .map_err(|_| Error::BackgroundShutdown)?;
+                    .map_err(|e| {
+                        debug!(?e, "client.send(ToBackground) error for NewClient");
+                        Error::BackgroundShutdown
+                    })?;
             }
             // Client tried to identify but was already identified
             (ToServer::Identify { .. }, true) => {
@@ -130,7 +155,13 @@ async fn run_client<K: SignatureKey + 'static>(
                 sender
                     .send_async(FromBackground::config(config.clone(), run))
                     .await
-                    .map_err(|_| Error::BackgroundShutdown)?;
+                    .map_err(|e| {
+                        debug!(
+                            ?e,
+                            "client.send(FromBackground) error for FromServer::Config"
+                        );
+                        Error::BackgroundShutdown
+                    })?;
             }
             // This will make sure that the cases below do not get called when we are not identified yet
             (_, false) => {
@@ -146,7 +177,10 @@ async fn run_client<K: SignatureKey + 'static>(
                         message_len,
                     })
                     .await
-                    .map_err(|_| Error::BackgroundShutdown)?;
+                    .map_err(|e| {
+                        debug!(?e, "client.send(ToBackground) error for IncomingBroadcase");
+                        Error::BackgroundShutdown
+                    })?;
                 let mut remaining = message_len as usize;
                 while remaining > 0 {
                     let message_chunk = recv_stream.recv_raw(remaining).await?;
@@ -158,7 +192,13 @@ async fn run_client<K: SignatureKey + 'static>(
                             message_chunk,
                         })
                         .await
-                        .map_err(|_| Error::BackgroundShutdown)?;
+                        .map_err(|e| {
+                            debug!(
+                                ?e,
+                                "client.send(ToBackground) error for IncomingBroadcastChunk"
+                            );
+                            Error::BackgroundShutdown
+                        })?;
                 }
             }
             // Client wants to send a direct message to another client
@@ -178,7 +218,13 @@ async fn run_client<K: SignatureKey + 'static>(
                         message_len,
                     })
                     .await
-                    .map_err(|_| Error::BackgroundShutdown)?;
+                    .map_err(|e| {
+                        debug!(
+                            ?e,
+                            "client.send(ToBackground) error for IncomingDirectMessage"
+                        );
+                        Error::BackgroundShutdown
+                    })?;
                 let mut remaining = message_len as usize;
                 while remaining > 0 {
                     let message_chunk = recv_stream.recv_raw(remaining).await?;
@@ -191,7 +237,13 @@ async fn run_client<K: SignatureKey + 'static>(
                             message_chunk,
                         })
                         .await
-                        .map_err(|_| Error::BackgroundShutdown)?;
+                        .map_err(|e| {
+                            debug!(
+                                ?e,
+                                "client.send(ToBackground) error for IncomingDirectMessageChunk"
+                            );
+                            Error::BackgroundShutdown
+                        })?;
                 }
             }
             // Client wants to know how many clients are connected in the current run
@@ -202,14 +254,20 @@ async fn run_client<K: SignatureKey + 'static>(
                         sender: parent_key.clone().unwrap(),
                     })
                     .await
-                    .map_err(|_| Error::BackgroundShutdown)?;
+                    .map_err(|e| {
+                        debug!(?e, "client.send(ToBackground) error for RequestClientCount");
+                        Error::BackgroundShutdown
+                    })?;
             }
             // Client wants to submit the results of this run
             (ToServer::Results(results), true) => {
                 to_background
                     .send_async(ToBackground::Results { results })
                     .await
-                    .map_err(|_| Error::BackgroundShutdown)?;
+                    .map_err(|e| {
+                        debug!(?e, "client.send(ToBackground) error Results");
+                        Error::BackgroundShutdown
+                    })?;
             }
         }
     }

@@ -326,7 +326,7 @@ pub mod test_util {
                 Ok("compact") => {
                     let fmt_layer = fmt::Layer::default()
                         .with_span_events(internal_event_filter)
-                        .with_ansi(true)
+                        .with_ansi(false)
                         .compact()
                         .with_test_writer();
                     let registry = Registry::default()

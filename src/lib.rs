@@ -39,8 +39,8 @@ pub mod types;
 mod tasks;
 mod utils;
 
+use hotshot_types::{error::StorageSnafu, traits::storage::ViewEntry};
 use hotshot_utils::art::async_spawn_local;
-use hotshot_types::{traits::storage::ViewEntry, error::StorageSnafu};
 use snafu::ResultExt;
 
 use crate::{
@@ -58,7 +58,7 @@ use hotshot_consensus::{
 };
 use hotshot_types::{
     constants::GENESIS_VIEW,
-    data::{ViewNumber, fake_commitment},
+    data::{fake_commitment, ViewNumber},
     message::{ConsensusMessage, DataMessage, Message},
     traits::{
         election::Election,
@@ -174,7 +174,14 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
     /// Creates a new hotshot with the given configuration options and sets it up with the given
     /// genesis block
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(private_key, cluster_public_keys, networking, storage, election, initializer))]
+    #[instrument(skip(
+        private_key,
+        cluster_public_keys,
+        networking,
+        storage,
+        election,
+        initializer
+    ))]
     pub async fn new(
         cluster_public_keys: impl IntoIterator<Item = I::SignatureKey>,
         public_key: I::SignatureKey,
@@ -185,7 +192,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
         storage: I::Storage,
         handler: I::StatefulHandler,
         election: I::Election,
-        initializer: HotShotInitializer<I::State>
+        initializer: HotShotInitializer<I::State>,
     ) -> Result<Self> {
         info!("Creating a new hotshot");
 
@@ -217,8 +224,11 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
         let anchored_leaf = initializer.inner;
 
         // insert to storage
-        inner.storage.append(
-            vec![ ViewEntry::Success(anchored_leaf.clone().into()) ]).await.context(StorageSnafu)?;
+        inner
+            .storage
+            .append(vec![ViewEntry::Success(anchored_leaf.clone().into())])
+            .await
+            .context(StorageSnafu)?;
 
         // insert genesis (or latest block) to state map
         let mut state_map = BTreeMap::default();
@@ -366,7 +376,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
         storage: I::Storage,
         handler: I::StatefulHandler,
         election: I::Election,
-        initializer: HotShotInitializer<I::State>
+        initializer: HotShotInitializer<I::State>,
     ) -> Result<HotShotHandle<I>> {
         // Save a clone of the storage for the handle
         let hotshot = Self::new(
@@ -379,7 +389,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
             storage,
             handler,
             election,
-            initializer
+            initializer,
         )
         .await?;
         let handle = tasks::spawn_all(&hotshot).await;
@@ -401,6 +411,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
         let inner = self.inner.clone();
         let pk = self.inner.public_key.clone();
         let kind = kind.into();
+        let id = self.id;
         async_spawn_local(async move {
             if inner
                 .networking
@@ -408,7 +419,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
                 .await
                 .is_err()
             {
-                warn!("Failed to broadcast message");
+                warn!("Failed to broadcast message, id={id}");
             };
         });
         Ok(())
@@ -449,6 +460,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
         msg: <I as TypeMap>::ConsensusMessage,
         sender: I::SignatureKey,
     ) {
+        debug!(?msg, "Incoming broadcast consensus message, id={}", self.id);
         // TODO validate incoming data message based on sender signature key
         // <github.com/ExpressoSystems/HotShot/issues/418>
         let msg_view_number = msg.view_number();
@@ -458,6 +470,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
             inner: self.inner.clone(),
         };
         if sender != api.get_leader(msg_view_number).await {
+            warn!(?msg, "sender is not leader, id={}", self.id);
             return;
         }
 
@@ -504,6 +517,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
 
         // We can only recv from a replicas
         // replicas should only send votes or if they timed out, timeouts
+        debug!(?msg, "Incoming direct consensus message, id={}", self.id);
         match msg {
             ConsensusMessage::Proposal(_) | ConsensusMessage::NextViewInterrupt(_) => {
                 warn!("Received a direct message for a proposal. This shouldn't be possible.");
@@ -546,6 +560,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
         _sender: I::SignatureKey,
     ) {
         // TODO validate incoming broadcast message based on sender signature key
+        debug!(?msg, "Incoming broadcast data message, id={}", self.id);
         match msg {
             DataMessage::SubmitTransaction(transaction) => {
                 // The API contract requires the hash to be unique
@@ -559,7 +574,10 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
             }
             DataMessage::NewestQuorumCertificate { .. } => {
                 // Log the exceptional situation and proceed
-                warn!(?msg, "Direct message received over broadcast channel");
+                warn!(
+                    ?msg,
+                    "Direct message received over broadcast channel, id={}", self.id
+                );
             }
         }
     }
@@ -571,7 +589,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
         _sender: I::SignatureKey,
     ) {
         // TODO validate incoming data message based on sender signature key
-        debug!(?msg, "Incoming direct data message");
+        debug!(?msg, "Incoming direct data message, id={}", self.id);
         match msg {
             DataMessage::NewestQuorumCertificate {
                 quorum_certificate: qc,
@@ -617,7 +635,10 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
 
             DataMessage::SubmitTransaction(_) => {
                 // Log exceptional situation and proceed
-                warn!(?msg, "Broadcast message received over direct channel");
+                warn!(
+                    ?msg,
+                    "Broadcast message received over direct channel, id={}", self.id
+                );
             }
         }
     }
@@ -626,7 +647,8 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
     async fn handle_network_change(&self, node: NetworkChange<I::SignatureKey>) {
         match node {
             NetworkChange::NodeConnected(peer) => {
-                info!("Connected to node {:?}", peer);
+                info!("id={}, Connected to node {:?}", self.id, peer);
+
                 let anchor = match self.inner.storage.get_anchored_view().await {
                     Ok(anchor) => anchor,
                     Err(e) => {
@@ -649,7 +671,7 @@ impl<I: NodeImplementation + Sync + Send + 'static> HotShot<I> {
                 }
             }
             NetworkChange::NodeDisconnected(peer) => {
-                info!("Lost connection to node {:?}", peer);
+                info!("id={}, Lost connection to node {:?}", self.id, peer);
             }
         }
     }
@@ -842,16 +864,19 @@ impl<I: NodeImplementation> hotshot_consensus::ConsensusApi<I> for HotShotConsen
 /// initializer struct for creating starting block
 pub struct HotShotInitializer<STATE: StateContents> {
     /// the leaf specified initialization
-    inner: Leaf<STATE>
+    inner: Leaf<STATE>,
 }
 
 impl<STATE: StateContents> HotShotInitializer<STATE> {
-
     /// initialize from genesis
     /// # Errors
     /// If we are unable to apply the genesis block to the default state
     pub fn from_genesis(genesis_block: <STATE as StateContents>::Block) -> Result<Self> {
-        let state = STATE::default().append(&genesis_block).map_err(|err| HotShotError::Misc { context: err.to_string()})?;
+        let state = STATE::default()
+            .append(&genesis_block)
+            .map_err(|err| HotShotError::Misc {
+                context: err.to_string(),
+            })?;
         let view_number = GENESIS_VIEW;
         let justify_qc = QuorumCertificate::<STATE>::genesis();
 
@@ -862,21 +887,13 @@ impl<STATE: StateContents> HotShotInitializer<STATE> {
                 parent_commitment: fake_commitment(),
                 deltas: genesis_block,
                 state,
-                rejected: Vec::new()
-            }
-
+                rejected: Vec::new(),
+            },
         })
-
     }
 
     /// reload previous state based on most recent leaf
     pub fn from_reload(anchor_leaf: Leaf<STATE>) -> Self {
-        Self {
-            inner: anchor_leaf
-        }
-
+        Self { inner: anchor_leaf }
     }
-
 }
-
-
