@@ -35,6 +35,16 @@ pub enum Checked<T> {
     Unchecked(T),
 }
 
+impl<T> Debug for Checked<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Valid(arg0) => f.debug_tuple("Valid").finish(),
+            Self::Inval(arg0) => f.debug_tuple("Inval").finish(),
+            Self::Unchecked(arg0) => f.debug_tuple("Unchecked").finish(),
+        }
+    }
+}
+
 /// Proof of this entity's right to vote, and of the weight of those votes
 pub trait VoteToken:
     Clone

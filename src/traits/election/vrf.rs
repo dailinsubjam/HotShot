@@ -18,7 +18,8 @@ use jf_primitives::{
     vrf::{blsvrf::BLSVRFScheme, Vrf},
 };
 use num::{rational::Ratio, BigUint, ToPrimitive};
-use rand::SeedableRng;
+use rand::Rng;
+use rand::{thread_rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use serde::{
     de::{self},
@@ -597,6 +598,15 @@ fn generate_view_seed<TYPES: NodeTypes, HASHER: digest::Digest>(
     let mut output = [0u8; 32];
     output.copy_from_slice(hasher.finalize().as_ref());
     output
+    // let mut result: u128 = 0;
+    // let mut rng = thread_rng();
+    // for i in 0..*view_number {
+    //     result = rng.gen();
+    // }
+    // let mut f = Vec::new();
+    // f.append(&mut result.clone().to_le_bytes().into_iter().collect::<Vec<_>>());
+    // f.append(&mut [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0].into_iter().collect::<Vec<_>>());
+    // f.try_into().unwrap()
 }
 
 /// represents a binomial query made by sortition
@@ -628,25 +638,25 @@ fn calculate_threshold_from_cache(
     previous_calculation: Option<(BinomialQuery, Ratio<BigUint>)>,
     query: BinomialQuery,
 ) -> Option<Ratio<BigUint>> {
-    if let Some((previous_query, previous_result)) = previous_calculation {
-        let expected_previous_query = BinomialQuery {
-            stake_attempt: query.stake_attempt - 1,
-            ..query
-        };
-        if previous_query == expected_previous_query {
-            let permutation = Ratio::new(
-                BigUint::from(query.replicas_stake - query.stake_attempt + 1),
-                BigUint::from(query.stake_attempt),
-            );
-            let p = query.get_p();
-            assert!(p.numer() < p.denom());
-            let reciprocal = Ratio::recip(&(Ratio::from_integer(BigUint::from(1_u32)) - p.clone()));
-            let result = previous_result * p * reciprocal * permutation;
-            assert!(result.numer() < result.denom());
-
-            return Some(result);
-        }
-    }
+    // if let Some((previous_query, previous_result)) = previous_calculation {
+    //     let expected_previous_query = BinomialQuery {
+    //         stake_attempt: query.stake_attempt - 1,
+    //         ..query
+    //     };
+    //     if previous_query == expected_previous_query {
+    //         let permutation = Ratio::new(
+    //             BigUint::from(query.replicas_stake - query.stake_attempt + 1),
+    //             BigUint::from(query.stake_attempt),
+    //         );
+    //         let p = query.get_p();
+    //         assert!(p.numer() < p.denom());
+    //         let reciprocal = Ratio::recip(&(Ratio::from_integer(BigUint::from(1_u32)) - p.clone()));
+    //         let result = previous_result * p * reciprocal * permutation;
+    //         assert!(result.numer() < result.denom());
+    //
+    //         return Some(result);
+    //     }
+    // }
     calculate_threshold(query)
 }
 
@@ -668,13 +678,12 @@ fn calculate_threshold_from_cache(
 // TODO keep data around from last iteration so less calculation is needed
 // TODO test this "correct/simple" implementation against any optimized version
 #[instrument]
-// fn calculate_threshold(stake_attempt: u32, replicas_stake: u64, total_stake: u64, sortition_parameter: u64) -> Option<Ratio<BigUint>> {
 fn calculate_threshold(query: BinomialQuery) -> Option<Ratio<BigUint>> {
     let stake_attempt = query.stake_attempt;
     tracing::info!("Running calculate threshold");
     // TODO (ct) better error handling
     if stake_attempt as u64 > query.replicas_stake {
-        error!("j is larger than amount of stake we are allowed");
+        error!("j (bin guess) is larger than amount of stake we are allowed; stake attempt : {:?}, replica stake: {:?}", stake_attempt, query.replicas_stake);
         return None;
     }
 
@@ -780,7 +789,12 @@ fn find_bin_idx(
                 let old_result = cache
                     .get(&maybe_old_query)
                     .map(|x| (maybe_old_query, x.clone()));
-                let result = calculate_threshold_from_cache(old_result, query.clone())?;
+                let result = calculate_threshold_from_cache(old_result, query.clone());
+                info!(
+                    "ASDF calculated reuslt is {:?} for query {:?}",
+                    result, query
+                );
+                let result = result?;
                 cache.insert(query, result.clone());
                 result
             }
@@ -792,9 +806,10 @@ fn find_bin_idx(
         // debugging info. Unnecessary
         {
             let right_threshold_float = ToPrimitive::to_f64(&right_threshold.clone());
+            let left_threshold_float = ToPrimitive::to_f64(&right_threshold.clone());
             let bin_val_float = ToPrimitive::to_f64(&bin_val.clone());
             let normalized_seed_float = ToPrimitive::to_f64(&normalized_seed.clone());
-            info!("rightthreshold: {right_threshold_float:?}, bin: {bin_val_float:?}, seed: {normalized_seed_float:?}");
+            info!("left_threshold: {left_threshold_float:?}, rightthreshold: {right_threshold_float:?}, bin: {bin_val_float:?}, seed: {normalized_seed_float:?}");
         }
 
         // from i in 0 to j + 1: B(i; replicas_stake; p)
@@ -1056,7 +1071,10 @@ mod tests {
             state::{dummy::DummyState, ConsensusTime},
         },
     };
-    use hotshot_utils::test_util::setup_logging;
+    use hotshot_utils::{
+        hack::nll_todo,
+        test_util::{setup_backtrace, setup_logging},
+    };
     use jf_primitives::{
         signatures::{
             bls::{BLSSignature, BLSVerKey},
@@ -1136,10 +1154,64 @@ mod tests {
     }
 
     #[test]
+    pub fn test_binomial() {
+        setup_logging();
+        setup_backtrace();
+        let node_counts = [10, 100, 1000];
+        let sortition_parameters = [10, 100, 1000];
+
+        for node_count in node_counts {
+            for sortition_parameter in sortition_parameters {
+                // dictates replica's stake
+                let replicas_stake: u64 = 100;
+                // dictates total number of trials
+                let total_stake: u64 = 1000;
+
+                let mut total_drawn_stake = 0;
+
+                let num_samples = 1000;
+                let mut rng = rand::thread_rng();
+
+                for i in 0..num_samples {
+                    for j in 0..node_count {
+                        error!("i: {:?}, j: {:?}", i, j);
+                        // generate a random sample uniformly at random
+                        let sample = (0..32_u32)
+                            .into_iter()
+                            .map(|_idx| rng.gen())
+                            .collect::<Vec<u8>>();
+
+                        /// this is how much stake we rolled
+                        let idx = find_bin_idx(
+                            replicas_stake,
+                            total_stake,
+                            sortition_parameter,
+                            &sample.try_into().unwrap(),
+                            &mut HashMap::default(),
+                        )
+                        .unwrap()
+                        .get();
+                        total_drawn_stake += idx;
+                    }
+                }
+
+                error!(
+                    "node_count: {:?}, sortition_parameter = {:?}, average stake: {:?}",
+                    node_count,
+                    sortition_parameter,
+                    total_drawn_stake / num_samples
+                );
+            }
+        }
+    }
+
+    #[test]
     pub fn test_sortition() {
         setup_logging();
         let (vrf_impl, keys) = gen_vrf_impl(10);
-        let views = 100;
+        let views = 1000;
+
+        let mut total_stake = 0;
 
         for view in 0..views {
             for (node_idx, (sk, pk)) in keys.iter().enumerate() {
@@ -1148,7 +1220,7 @@ mod tests {
                     .unwrap();
                 match token_result {
                     Some(token) => {
-                        let count = token.count;
+                        let count = token.count.clone();
                         let result = vrf_impl
                             .validate_vote_token(
                                 ViewNumber::new(view),
@@ -1156,7 +1228,9 @@ mod tests {
                                 Checked::Unchecked(token),
                             )
                             .unwrap();
+                        error!("result is {:?}", result);
                         let result_is_valid = check_if_valid(&result);
+                        total_stake += count.get();
                         error!("view {view:?}, node_idx {node_idx:?}, stake {count:?} ");
                         assert!(result_is_valid);
                     }
@@ -1164,6 +1238,8 @@ mod tests {
                 }
             }
         }
+
+        error!("average stake is {:?}", total_stake / views);
     }
 
     #[test]
