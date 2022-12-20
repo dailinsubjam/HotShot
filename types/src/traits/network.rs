@@ -16,7 +16,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use async_tungstenite::tungstenite::error as werror;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use snafu::Snafu;
 use std::{
     sync::{atomic::AtomicBool, Arc},
@@ -112,6 +112,9 @@ pub trait NetworkingImplementation<
     PROPOSAL: ProposalType<NodeType = TYPES>,
 >: Clone + Send + Sync + 'static
 {
+    type Message : NetworkMessage<Self::Contents>;
+    type Contents : Passable;
+
     /// Returns true when node is successfully initialized
     /// into the network
     ///
@@ -123,33 +126,33 @@ pub trait NetworkingImplementation<
     /// Should provide that the message eventually reach all non-faulty nodes
     async fn broadcast_message(
         &self,
-        message: Message<TYPES, LEAF, PROPOSAL>,
+        message: Self::Message,
     ) -> Result<(), NetworkError>;
 
     /// Sends a direct message to a specific node
     async fn message_node(
         &self,
-        message: Message<TYPES, LEAF, PROPOSAL>,
+        message: Self::Message,
         recipient: TYPES::SignatureKey,
     ) -> Result<(), NetworkError>;
 
     /// Moves out the entire queue of received broadcast messages, should there be any
     ///
     /// Provided as a future to allow the backend to do async locking
-    async fn broadcast_queue(&self) -> Result<Vec<Message<TYPES, LEAF, PROPOSAL>>, NetworkError>;
+    async fn broadcast_queue(&self) -> Result<Vec<Self::Message>, NetworkError>;
 
     /// Provides a future for the next received broadcast
     ///
     /// Will unwrap the underlying `NetworkMessage`
-    async fn next_broadcast(&self) -> Result<Message<TYPES, LEAF, PROPOSAL>, NetworkError>;
+    async fn next_broadcast(&self) -> Result<Self::Message, NetworkError>;
 
     /// Moves out the entire queue of received direct messages to this node
-    async fn direct_queue(&self) -> Result<Vec<Message<TYPES, LEAF, PROPOSAL>>, NetworkError>;
+    async fn direct_queue(&self) -> Result<Vec<Self::Message>, NetworkError>;
 
     /// Provides a future for the next received direct message to this node
     ///
     /// Will unwrap the underlying `NetworkMessage`
-    async fn next_direct(&self) -> Result<Message<TYPES, LEAF, PROPOSAL>, NetworkError>;
+    async fn next_direct(&self) -> Result<Self::Message, NetworkError>;
 
     /// Node's currently known to the networking implementation
     ///
@@ -229,4 +232,46 @@ pub trait NetworkReliability: std::fmt::Debug + Sync + std::marker::Send {
     /// sample from uniform distribution to decide whether
     /// or not to keep a packet
     fn sample_delay(&self) -> Duration;
+}
+
+/// collection of "normal" traits that makes the underlying object passable between
+/// servers and threads
+pub trait Passable : Sync + Send + 'static + Clone + Serialize + for<'a> Deserialize<'a> + std::fmt::Debug {}
+
+
+// cann't have contents as associated type
+pub trait NetworkMessage<CONTENTS>
+    : Passable
+where
+    CONTENTS: Passable
+{
+    type Resources;
+    type Targets;
+    const PRIORITIES: usize;
+
+    fn resources(&self) -> Self::Resources;
+    fn targets(&self) -> Self::Targets;
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(bound(deserialize = ""))]
+pub struct StubMessage<CONTENTS: Passable>(CONTENTS);
+
+impl<M: Passable> Passable for StubMessage<M> {}
+
+impl<CONTENTS: Passable>
+NetworkMessage<CONTENTS> for StubMessage<CONTENTS> {
+    type Resources = ();
+
+    type Targets = ();
+
+    const PRIORITIES: usize = 1;
+
+    fn resources(&self) -> Self::Resources {
+        ()
+    }
+
+    fn targets(&self) -> Self::Targets {
+        ()
+    }
 }

@@ -12,6 +12,8 @@ pub mod memory_network;
 #[cfg(feature = "async-std-executor")]
 pub mod w_network;
 
+pub mod two_networks;
+
 pub use hotshot_types::traits::network::{
     ChannelDisconnectedSnafu, ChannelSendSnafu, CouldNotDeliverSnafu, ExecutorSnafu,
     FailedToBindListenerSnafu, FailedToDeserializeSnafu, FailedToSerializeSnafu,

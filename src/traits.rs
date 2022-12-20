@@ -19,6 +19,7 @@ pub mod implementations {
             centralized_server_network::CentralizedServerNetwork,
             libp2p_network::{Libp2pNetwork, PeerInfoVec},
             memory_network::{DummyReliability, MasterMap, MemoryNetwork},
+            two_networks::TwoNetworks,
         },
         storage::memory_storage::MemoryStorage, // atomic_storage::AtomicStorage,
     };
