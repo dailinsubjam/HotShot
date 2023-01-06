@@ -91,6 +91,7 @@ struct Inner<TYPES: NodeTypes> {
     run_ready: AtomicBool,
     #[debug(skip)]
     /// The networking metrics we're keeping track of
+    //KALEY: orchestrator
     metrics: NetworkingMetrics,
 }
 
@@ -177,6 +178,7 @@ impl<TYPES: NodeTypes> Inner<TYPES> {
     }
 
     /// Request the client count from the server
+    //KALEY: orchestrator?
     async fn request_client_count(&self, sender: OneShotSender<u32>) {
         self.request_client_count_sender.write().await.push(sender);
         self.sending
@@ -630,6 +632,7 @@ impl<TYPES: NodeTypes> Inner<TYPES> {
     }
 
     /// Get the current `NetworkChange` messages received from the server. Returning 0 messages if nothing was received.
+    //KALEY: orchestrator?
     async fn get_network_changes(&self) -> Vec<NetworkChange<TYPES::SignatureKey>> {
         self.remove_messages_from_queue(|msg, index, _| {
             let mut remove_this = BTreeSet::new();
@@ -666,6 +669,7 @@ impl<TYPES: NodeTypes> CentralizedServerNetwork<TYPES> {
     /// # Panics
     ///
     /// Will panic if the server has a different signature key (`K`) or election config (`E`)
+    //KALEY: orchestrator?
     pub async fn connect_with_server_config(
         metrics: Box<dyn Metrics>,
         addr: SocketAddr,
@@ -742,6 +746,7 @@ impl<TYPES: NodeTypes> CentralizedServerNetwork<TYPES> {
     }
 
     /// Send the results for this run to the server
+    //KALEY: orchestrator?
     pub async fn send_results(&self, results: RunResults) {
         let (sender, receiver) = oneshot();
         let _result = self
@@ -754,6 +759,7 @@ impl<TYPES: NodeTypes> CentralizedServerNetwork<TYPES> {
     }
 
     /// Returns `true` if the server indicated that the current run was ready to start
+    //KALEY: orchestrator?
     pub fn run_ready(&self) -> bool {
         self.inner.run_ready.load(Ordering::Relaxed)
     }
@@ -798,6 +804,7 @@ impl<TYPES: NodeTypes> CentralizedServerNetwork<TYPES> {
     /// Create a `CentralizedServerNetwork`. Every time a new TCP connection is needed, `create_connection` is called.
     ///
     /// This will auto-reconnect when the network loses connection to the server.
+    //KALEY: orchestrator?
     fn create<F>(
         metrics: Box<dyn Metrics>,
         known_nodes: Vec<TYPES::SignatureKey>,
@@ -1108,6 +1115,7 @@ impl<TYPES: NodeTypes> NetworkingImplementation<TYPES> for CentralizedServerNetw
         self.inner.known_nodes.clone()
     }
 
+   //KALEY: orchestrator?
     async fn network_changes(
         &self,
     ) -> Result<Vec<NetworkChange<TYPES::SignatureKey>>, NetworkError> {

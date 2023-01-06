@@ -133,7 +133,6 @@ async fn poll_generic<TYPES: NodeTypes>(
 
     loop {
         let mut endpoint = String::new();
-        // TODO ED probably want to export these endpoints from the web server so we aren't hardcoding them here
         match kind {
             MessageType::Proposal => {
                 endpoint = config::get_proposal_route((*view_number).into());
