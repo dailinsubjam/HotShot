@@ -24,6 +24,7 @@ impl<K, E> Default for ClientConfig<K, E> {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Libp2pConfig {
+    /// FIXME this should be removed
     pub run: Run,
     pub bootstrap_nodes: Vec<(SocketAddr, Vec<u8>)>,
     pub public_ip: IpAddr,

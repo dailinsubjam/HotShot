@@ -538,7 +538,7 @@ async fn main() {
 
     error!("waiting for connections to hotshot!");
     let network = hotshot.networking();
-    <ThisNetworking as CommunicationChannel<_, _, _, ThisElection>>::ready(network).await;
+    <ThisNetworking as CommunicationChannel<_, _, _, ThisElection>>::ready_blocking(network).await;
 
     if let Some(server) = &mut server_conn {
         error!("Waiting for server to start us up");

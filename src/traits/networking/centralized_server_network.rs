@@ -993,12 +993,17 @@ impl From<hotshot_centralized_server::Error> for Error {
 impl<M: NetworkMsg, K: SignatureKey + 'static, E: ElectionConfig + 'static> ConnectedNetwork<M, K>
     for CentralizedServerNetwork<K, E>
 {
-    #[instrument(name = "CentralizedServer::ready", skip_all)]
-    async fn ready(&self) -> bool {
+    #[instrument(name = "CentralizedServer::ready_blocking", skip_all)]
+    async fn ready_blocking(&self) -> bool {
         while !self.inner.connected.load(Ordering::Relaxed) {
             async_sleep(Duration::from_secs(1)).await;
         }
         true
+    }
+
+    #[instrument(name = "CentralizedServer::ready", skip_all)]
+    async fn ready_nonblocking(&self) -> bool {
+        self.run_ready()
     }
 
     #[instrument(name = "CentralizedServer::shut_down", skip_all)]
@@ -1100,11 +1105,19 @@ impl<
         ELECTION: Election<TYPES>,
     > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION> for CentralizedCommChannel<TYPES>
 {
-    async fn ready(&self) -> bool {
+    async fn ready_blocking(&self) -> bool {
         <CentralizedServerNetwork<_, _> as ConnectedNetwork<
             Message<TYPES, LEAF, PROPOSAL>,
             TYPES::SignatureKey,
-        >>::ready(&self.0)
+        >>::ready_blocking(&self.0)
+        .await
+    }
+
+    async fn ready_nonblocking(&self) -> bool {
+        <CentralizedServerNetwork<_, _> as ConnectedNetwork<
+            Message<TYPES, LEAF, PROPOSAL>,
+            TYPES::SignatureKey,
+        >>::ready_nonblocking(&self.0)
         .await
     }
 

@@ -182,7 +182,7 @@ where
         runner.add_nodes(self.start_nodes).await;
 
         for (idx, node) in runner.nodes().collect::<Vec<_>>().iter().enumerate().rev() {
-            node.networking().ready().await;
+            node.networking().ready_blocking().await;
             info!("EXECUTOR: NODE {:?} IS READY", idx);
         }
 

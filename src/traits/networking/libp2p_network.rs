@@ -466,10 +466,18 @@ impl<M: NetworkMsg, K: SignatureKey + 'static> Libp2pNetwork<M, K> {
 
 #[async_trait]
 impl<M: NetworkMsg, K: SignatureKey + 'static> ConnectedNetwork<M, K> for Libp2pNetwork<M, K> {
-    #[instrument(name = "Libp2pNetwork::ready", skip_all)]
-    async fn ready(&self) -> bool {
+    #[instrument(name = "Libp2pNetwork::ready_blocking", skip_all)]
+    async fn ready_blocking(&self) -> bool {
         self.wait_for_ready().await;
         true
+    }
+
+    #[instrument(name = "Libp2pNetwork::ready_nonblocking", skip_all)]
+    async fn ready_nonblocking(&self) -> bool {
+        self
+            .inner
+            .is_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[instrument(name = "Libp2pNetwork::shut_down", skip_all)]
@@ -690,8 +698,12 @@ impl<
     > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION>
     for Libp2pCommChannel<TYPES, LEAF, PROPOSAL>
 {
-    async fn ready(&self) -> bool {
-        self.0.ready().await
+    async fn ready_blocking(&self) -> bool {
+        self.0.ready_blocking().await
+    }
+
+    async fn ready_nonblocking(&self) -> bool {
+        self.0.ready_nonblocking().await
     }
 
     async fn shut_down(&self) -> () {

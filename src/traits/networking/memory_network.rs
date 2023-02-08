@@ -323,8 +323,13 @@ where
 // TODO instrument these functions
 #[async_trait]
 impl<M: NetworkMsg, K: SignatureKey + 'static> ConnectedNetwork<M, K> for MemoryNetwork<M, K> {
-    #[instrument(name = "MemoryNetwork::ready")]
-    async fn ready(&self) -> bool {
+    #[instrument(name = "MemoryNetwork::ready_blocking")]
+    async fn ready_blocking(&self) -> bool {
+        true
+    }
+
+    #[instrument(name = "MemoryNetwork::ready_nonblocking")]
+    async fn ready_nonblocking(&self) -> bool {
         true
     }
 
@@ -457,8 +462,12 @@ impl<
     > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION>
     for MemoryCommChannel<TYPES, LEAF, PROPOSAL>
 {
-    async fn ready(&self) -> bool {
-        self.0.ready().await
+    async fn ready_blocking(&self) -> bool {
+        self.0.ready_blocking().await
+    }
+
+    async fn ready_nonblocking(&self) -> bool {
+        self.0.ready_nonblocking().await
     }
 
     async fn shut_down(&self) -> () {
