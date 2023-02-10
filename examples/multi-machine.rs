@@ -4,7 +4,7 @@ use async_compatibility_layer::{logging::{setup_logging, setup_backtrace}, art::
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
-use hotshot::{types::{SignatureKey, HotShotHandle}, traits::{NetworkError, election::static_committee::{GeneralStaticCommittee, StaticElectionConfig}, implementations::{Libp2pCommChannel, CentralizedCommChannel, Libp2pNetwork}, NodeImplementation}, demos::dentry::{DEntryTypes, DEntryNode, DEntryState, DEntryTransaction}};
+use hotshot::{types::{SignatureKey, HotShotHandle}, traits::{NetworkError, election::static_committee::{GeneralStaticCommittee, StaticElectionConfig}, implementations::{Libp2pCommChannel, CentralizedCommChannel, Libp2pNetwork, MemoryStorage}, NodeImplementation}, demos::dentry::{DEntryTypes, DEntryNode, DEntryState, DEntryTransaction}};
 use hotshot_centralized_server::{Run, TcpStreamUtil, TcpStreamUtilWithRecv, ToServer, FromServer, TcpStreamUtilWithSend, NetworkConfig, RunResults, config::Libp2pConfig};
 use hotshot_types::{traits::{node_implementation::NodeType, network::CommunicationChannel, metrics::NoMetrics, state::{TestableState, TestableBlock}, election::Election}, data::{ValidatingLeaf, ValidatingProposal, TestableLeaf}, HotShotConfig};
 use libp2p::{Multiaddr, multiaddr::{self, Protocol}, PeerId, identity::{Keypair, ed25519::{SecretKey, Keypair as EdKeypair}}, kad::kbucket::Node};
@@ -91,15 +91,59 @@ enum CliOpt {
     Centralized(CliOrchestrated),
 }
 
-/// TODO only constrain networking
-impl CliConfig<_, _, _, _> for Libp2pConfig {
+#[async_trait]
+impl<
+    TYPES: NodeType,
+    ELECTION: Election<TYPES>,
+    NODE: NodeImplementation<TYPES, Leaf = ValidatingLeaf<TYPES>, Proposal = ValidatingProposal<TYPES, ELECTION>, Election = ELECTION, Networking = Libp2pCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>, Storage = MemoryStorage<TYPES, ValidatingLeaf<TYPES>>>
+> CliConfig<TYPES, ELECTION, Libp2pCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>, NODE> for Libp2pClientConfig<TYPES, ELECTION>
+    where
+        <TYPES as NodeType>::StateType : TestableState,
+        <TYPES as NodeType>::BlockType : TestableBlock,
+        ValidatingLeaf<TYPES> : TestableLeaf,
+{
+    async fn wait_for_ready(&self){
+    }
+
+    async fn init_state_and_hotshot(&self) -> (TYPES::StateType, HotShotHandle<TYPES, NODE>) {
+        nll_todo()
+    }
+
+    fn get_config(&self) -> NetworkConfig<<TYPES as NodeType>::SignatureKey, <TYPES as NodeType>::ElectionConfigType>{
+        nll_todo()
+    }
+
 }
 
-impl CliConfig<_, _, _, _> for CentralizedConfig {
+
+
+#[async_trait]
+impl<
+    TYPES: NodeType,
+    ELECTION: Election<TYPES>,
+    NODE: NodeImplementation<TYPES, Leaf = ValidatingLeaf<TYPES>, Proposal = ValidatingProposal<TYPES, ELECTION>, Election = ELECTION, Networking = CentralizedCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>, Storage = MemoryStorage<TYPES, ValidatingLeaf<TYPES>>>
+> CliConfig<TYPES, ELECTION, CentralizedCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>, NODE> for CentralizedConfig<TYPES, ELECTION>
+    where
+        <TYPES as NodeType>::StateType : TestableState,
+        <TYPES as NodeType>::BlockType : TestableBlock,
+        ValidatingLeaf<TYPES> : TestableLeaf,
+{
+    async fn wait_for_ready(&self){
+    }
+
+    async fn init_state_and_hotshot(&self) -> (TYPES::StateType, HotShotHandle<TYPES, NODE>) {
+        nll_todo()
+    }
+
+    fn get_config(&self) -> NetworkConfig<<TYPES as NodeType>::SignatureKey, <TYPES as NodeType>::ElectionConfigType>{
+        nll_todo()
+    }
+
 }
+
 
 impl CliOpt {
-    pub async fn init(&self) -> Result<Config, NetworkError> {
+    pub async fn init<TYPES: NodeType, ELECTION: Election<TYPES>>(&self) -> Result<Config<TYPES, ELECTION>, NetworkError> {
         match self {
             CliOpt::Libp2p(opt) =>
             {
@@ -110,14 +154,14 @@ impl CliOpt {
                 stream.send(ToServer::<<DEntryTypes as NodeType>::SignatureKey>::GetConfig).await.unwrap();
                 error!("Waiting for server config...");
                 let (mut config, run) = match stream.recv().await.expect("Could not get Libp2pConfig") {
-                    FromServer::<<DEntryTypes as NodeType>::SignatureKey, <DEntryTypes as NodeType>::ElectionConfigType>::Config { config, run } => (config, run),
+                    FromServer::<<TYPES as NodeType>::SignatureKey, <TYPES as NodeType>::ElectionConfigType>::Config { config, run } => (config, run),
                     x => panic!("Expected Libp2pConfig, got {x:?}"),
                 };
                 error!("Received server config: {config:?}");
-                let (pubkey, privkey) = <<DEntryTypes as NodeType>::SignatureKey as SignatureKey>::generated_from_seed_indexed(config.seed, config.node_index);
+                let (pubkey, privkey) = <<TYPES as NodeType>::SignatureKey as SignatureKey>::generated_from_seed_indexed(config.seed, config.node_index);
 
                 stream
-                    .send(ToServer::Identify { key: pubkey })
+                    .send(ToServer::Identify { key: pubkey.clone() })
                     .await
                     .expect("Could not identify with server");
 
@@ -190,7 +234,7 @@ impl CliOpt {
                     Libp2pNetwork::new(
                         NoMetrics::new(),
                         node_config,
-                        pubkey,
+                        pubkey.clone(),
                         Arc::new(RwLock::new(
                                 bootstrap_nodes
                                 .iter()
@@ -202,15 +246,7 @@ impl CliOpt {
                                 nll_todo(),
                                 )
                     .await
-                    .map(Libp2pCommChannel::<DEntryTypes, ThisLeaf, ThisProposal>::new);
-
-
-
-
-
-
-
-
+                    .map(Libp2pCommChannel::<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>::new).unwrap();
 
                 config.libp2p_config = Some(libp2p_config);
                 // TODO do we want base ports to be the same?? This breaks it for local testing.
@@ -219,6 +255,8 @@ impl CliOpt {
                     config: *config,
                     //TODO do we need this
                     run,
+                    // privkey,
+                    // pubkey,
                     privkey,
                     pubkey,
                     bootstrap_nodes,
@@ -226,7 +264,7 @@ impl CliOpt {
                     identity,
                     bound_addr,
                     socket: stream,
-                    network: nll_todo()
+                    network
                 }))
             }
             CliOpt::Centralized(opt) =>
@@ -250,7 +288,7 @@ pub struct Libp2pClientConfig<TYPES: NodeType, ELECTION: Election<TYPES>> {
     identity: Keypair,
 
     socket: TcpStreamUtil,
-    network: Libp2pCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>>,
+    network: Libp2pCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>,
     //TODO do we need this? I don't think so
     run: Run,
     config: NetworkConfig<<TYPES as NodeType>::SignatureKey, <TYPES as NodeType>::ElectionConfigType>
@@ -258,63 +296,63 @@ pub struct Libp2pClientConfig<TYPES: NodeType, ELECTION: Election<TYPES>> {
 
 pub enum Config<TYPES: NodeType, ELECTION: Election<TYPES>> {
     Libp2pConfig(Libp2pClientConfig<TYPES, ELECTION>),
-    CentralizedConfig(CentralizedConfig<TYPES>),
+    CentralizedConfig(CentralizedConfig<TYPES, ELECTION>),
 }
 
-pub struct CentralizedConfig<TYPES: NodeType> {
+pub struct CentralizedConfig<TYPES: NodeType, ELECTION: Election<TYPES>> {
     config: NetworkConfig<TYPES::SignatureKey, TYPES::ElectionConfigType>,
-    network: CentralizedCommChannel<TYPES>,
+    network: CentralizedCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>,
     run: Run
 }
 
-impl Config {
-    pub async fn wait_for_ready(&self) {
-        // FIXME there's absolutely got to be a better way to do this
-        // I tried `get_network` but network isn't object safe
-        // so that's no good.
-        // maybe a trait based approach?
-        match self {
-            Config::Libp2pConfig(config) => {
-                while !CommunicationChannel::<_, _, _, ThisElection>::ready_nonblocking(&config.network).await {
-                    async_sleep(Duration::from_secs(1)).await;
-                }
-            }
-            Config::CentralizedConfig(config) => {
-                let node_count = config.config.config.total_nodes;
-                // we leave this as a check + sleep
-                // for a finer grained logging about which nodes
-                // are "ready to go"TM
-                // FIXME we should add this to the commchannel/network API
-                while !CommunicationChannel::<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>::ready_nonblocking(&config.network).await {
-                    let connected_clients = config.network.get_connected_client_count().await;
-                    error!("{} / {}", connected_clients, node_count);
-                    async_sleep(Duration::from_secs(1)).await;
-                }
-            }
-        }
-    }
-
-    pub async fn init_state_and_hotshot<CommChannel: CommunicationChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>>(
-        &self
-        ) -> (DEntryState, HotShotHandle<DEntryTypes, DEntryNode<CommChannel, ThisElection>>) {
-        match self {
-            Config::Libp2pConfig(config) => {
-                nll_todo()
-            },
-            Config::CentralizedConfig(config) => {
-                nll_todo()
-            },
-        }
-    }
-
-}
+// impl Config {
+//     pub async fn wait_for_ready(&self) {
+//         // FIXME there's absolutely got to be a better way to do this
+//         // I tried `get_network` but network isn't object safe
+//         // so that's no good.
+//         // maybe a trait based approach?
+//         match self {
+//             Config::Libp2pConfig(config) => {
+//                 while !CommunicationChannel::<_, _, _, ThisElection>::ready_nonblocking(&config.network).await {
+//                     async_sleep(Duration::from_secs(1)).await;
+//                 }
+//             }
+//             Config::CentralizedConfig(config) => {
+//                 let node_count = config.config.config.total_nodes;
+//                 // we leave this as a check + sleep
+//                 // for a finer grained logging about which nodes
+//                 // are "ready to go"TM
+//                 // FIXME we should add this to the commchannel/network API
+//                 while !CommunicationChannel::<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>::ready_nonblocking(&config.network).await {
+//                     let connected_clients = config.network.get_connected_client_count().await;
+//                     error!("{} / {}", connected_clients, node_count);
+//                     async_sleep(Duration::from_secs(1)).await;
+//                 }
+//             }
+//         }
+//     }
+//
+//     pub async fn init_state_and_hotshot<CommChannel: CommunicationChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>>(
+//         &self
+//         ) -> (DEntryState, HotShotHandle<DEntryTypes, DEntryNode<CommChannel, ThisElection>>) {
+//         match self {
+//             Config::Libp2pConfig(config) => {
+//                 nll_todo()
+//             },
+//             Config::CentralizedConfig(config) => {
+//                 nll_todo()
+//             },
+//         }
+//     }
+//
+// }
 
 #[async_trait]
 pub trait CliConfig<
     TYPES: NodeType,
     ELECTION: Election<TYPES>,
-    NETWORK: CommunicationChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>,
-    NODE: NodeImplementation<TYPES, Leaf=ValidatingLeaf<TYPES>, Proposal = ValidatingProposal<TYPES, ELECTION>>
+    NETWORK: CommunicationChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>, ELECTION>,
+    NODE: NodeImplementation<TYPES, Leaf = ValidatingLeaf<TYPES>, Proposal = ValidatingProposal<TYPES, ELECTION>, Election = ELECTION, Networking = NETWORK, Storage = MemoryStorage<TYPES, ValidatingLeaf<TYPES>>>
 >
     where
         <TYPES as NodeType>::StateType : TestableState,
@@ -323,7 +361,7 @@ pub trait CliConfig<
 {
     async fn wait_for_ready(&self);
 
-    async fn init_state_and_hotshot(&self) -> (DEntryState, HotShotHandle<DEntryTypes, DEntryNode<NETWORK, ThisElection>>);
+    async fn init_state_and_hotshot(&self) -> (TYPES::StateType, HotShotHandle<TYPES, NODE>);
 
     async fn run_consensus(&self, mut hotshot: HotShotHandle<TYPES, NODE>) -> RunResults {
         let NetworkConfig {
@@ -434,7 +472,7 @@ pub trait CliConfig<
         }
     }
 
-    fn get_config(&self) -> NetworkConfig<<DEntryTypes as NodeType>::SignatureKey, <DEntryTypes as NodeType>::ElectionConfigType>;
+    fn get_config(&self) -> NetworkConfig<<TYPES as NodeType>::SignatureKey, <TYPES as NodeType>::ElectionConfigType>;
 }
 
 
