@@ -48,7 +48,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::Duration, marker::PhantomData,
 };
 use tracing::{error, instrument};
 
@@ -1069,16 +1069,27 @@ impl<M: NetworkMsg, K: SignatureKey + 'static, E: ElectionConfig + 'static> Conn
 
 /// libp2p identity communication channel
 #[derive(Clone)]
-pub struct CentralizedCommChannel<TYPES: NodeType>(
+pub struct CentralizedCommChannel<
+    TYPES: NodeType,
+    LEAF: LeafType<NodeType = TYPES>,
+    PROPOSAL: ProposalType<NodeType = TYPES>,
+    ELECTION: Election<TYPES>,
+>(
     CentralizedServerNetwork<TYPES::SignatureKey, TYPES::ElectionConfigType>,
+    PhantomData<(LEAF, PROPOSAL, ELECTION)>,
 );
 
-impl<TYPES: NodeType> CentralizedCommChannel<TYPES> {
+impl<
+    TYPES: NodeType,
+    LEAF: LeafType<NodeType = TYPES>,
+    PROPOSAL: ProposalType<NodeType = TYPES>,
+    ELECTION: Election<TYPES>,
+> CentralizedCommChannel<TYPES, LEAF, PROPOSAL, ELECTION> {
     /// create new communication channel
     pub fn new(
         network: CentralizedServerNetwork<TYPES::SignatureKey, TYPES::ElectionConfigType>,
     ) -> Self {
-        Self(network)
+        Self(network, PhantomData::default())
     }
 
     /// passthru for example?
@@ -1103,7 +1114,7 @@ impl<
         LEAF: LeafType<NodeType = TYPES>,
         PROPOSAL: ProposalType<NodeType = TYPES>,
         ELECTION: Election<TYPES>,
-    > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION> for CentralizedCommChannel<TYPES>
+    > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION> for CentralizedCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 {
     async fn ready_blocking(&self) -> bool {
         <CentralizedServerNetwork<_, _> as ConnectedNetwork<
@@ -1169,7 +1180,7 @@ impl<
         PROPOSAL: ProposalType<NodeType = TYPES>,
         ELECTION: Election<TYPES>,
     > TestableNetworkingImplementation<TYPES, LEAF, PROPOSAL, ELECTION>
-    for CentralizedCommChannel<TYPES>
+    for CentralizedCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 where
     TYPES::SignatureKey: TestableSignatureKey,
 {
@@ -1203,7 +1214,7 @@ where
                 known_nodes[id as usize].clone(),
             );
             network.server_shutdown_signal = Some(sender);
-            CentralizedCommChannel(network)
+            CentralizedCommChannel(network, PhantomData::default())
         })
     }
 

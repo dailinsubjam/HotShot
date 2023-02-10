@@ -15,8 +15,8 @@ use tracing::{instrument, error, debug};
 type ThisLeaf = ValidatingLeaf<DEntryTypes>;
 type ThisElection =
 GeneralStaticCommittee<DEntryTypes, ThisLeaf, <DEntryTypes as NodeType>::SignatureKey>;
-type Libp2pNetworking = Libp2pCommChannel<DEntryTypes, ThisLeaf, ThisProposal>;
-type CentralizedNetworking = CentralizedCommChannel<DEntryTypes>;
+type Libp2pNetworking = Libp2pCommChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>;
+type CentralizedNetworking = CentralizedCommChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>;
 type ThisProposal = ValidatingProposal<DEntryTypes, ThisElection>;
 type Libp2pNode = DEntryNode<Libp2pNetworking, ThisElection>;
 type CentralizedNode = DEntryNode<CentralizedNetworking, ThisElection>;
@@ -238,7 +238,7 @@ impl CliOpt {
     }
 }
 
-pub struct Libp2pClientConfig<TYPES: NodeType> {
+pub struct Libp2pClientConfig<TYPES: NodeType, ELECTION: Election<TYPES>> {
     bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
     /// for hotshot layer
     privkey: <<TYPES as NodeType>::SignatureKey as SignatureKey>::PrivateKey,
@@ -250,20 +250,20 @@ pub struct Libp2pClientConfig<TYPES: NodeType> {
     identity: Keypair,
 
     socket: TcpStreamUtil,
-    network: Libp2pNetworking,
+    network: Libp2pCommChannel<TYPES, ValidatingLeaf<TYPES>, ValidatingProposal<TYPES, ELECTION>>,
     //TODO do we need this? I don't think so
     run: Run,
     config: NetworkConfig<<TYPES as NodeType>::SignatureKey, <TYPES as NodeType>::ElectionConfigType>
 }
 
-pub enum Config<TYPES: NodeType> {
-    Libp2pConfig(Libp2pClientConfig<TYPES>),
+pub enum Config<TYPES: NodeType, ELECTION: Election<TYPES>> {
+    Libp2pConfig(Libp2pClientConfig<TYPES, ELECTION>),
     CentralizedConfig(CentralizedConfig<TYPES>),
 }
 
 pub struct CentralizedConfig<TYPES: NodeType> {
     config: NetworkConfig<TYPES::SignatureKey, TYPES::ElectionConfigType>,
-    network: CentralizedNetworking,
+    network: CentralizedCommChannel<TYPES>,
     run: Run
 }
 

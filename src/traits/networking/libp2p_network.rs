@@ -42,7 +42,7 @@ use std::{
     num::NonZeroUsize,
     str::FromStr,
     sync::{atomic::AtomicBool, Arc},
-    time::Duration,
+    time::Duration, marker::PhantomData,
 };
 use tracing::{error, info, instrument};
 
@@ -115,7 +115,7 @@ impl<
         PROPOSAL: ProposalType<NodeType = TYPES>,
         ELECTION: Election<TYPES>,
     > TestableNetworkingImplementation<TYPES, LEAF, PROPOSAL, ELECTION>
-    for Libp2pCommChannel<TYPES, LEAF, PROPOSAL>
+    for Libp2pCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 where
     TYPES::SignatureKey: TestableSignatureKey,
 {
@@ -207,6 +207,7 @@ where
                         )
                         .await
                         .unwrap(),
+                        PhantomData,
                     )
                 })
             }
@@ -670,19 +671,21 @@ pub struct Libp2pCommChannel<
     TYPES: NodeType,
     LEAF: LeafType<NodeType = TYPES>,
     PROPOSAL: ProposalType<NodeType = TYPES>,
->(Libp2pNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>);
+    ELECTION: Election<TYPES>,
+>(Libp2pNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>, PhantomData<ELECTION>);
 
 impl<
         TYPES: NodeType,
         LEAF: LeafType<NodeType = TYPES>,
         PROPOSAL: ProposalType<NodeType = TYPES>,
-    > Libp2pCommChannel<TYPES, LEAF, PROPOSAL>
+        ELECTION: Election<TYPES>,
+    > Libp2pCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 {
     /// create a new libp2p communication channel
     pub fn new(
         network: Libp2pNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>,
     ) -> Self {
-        Self(network)
+        Self(network, PhantomData::default())
     }
 }
 
@@ -696,7 +699,7 @@ impl<
         PROPOSAL: ProposalType<NodeType = TYPES>,
         ELECTION: Election<TYPES>,
     > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION>
-    for Libp2pCommChannel<TYPES, LEAF, PROPOSAL>
+    for Libp2pCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 {
     async fn ready_blocking(&self) -> bool {
         self.0.ready_blocking().await

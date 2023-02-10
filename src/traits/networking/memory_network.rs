@@ -37,7 +37,7 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
-    },
+    }, marker::PhantomData,
 };
 use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 
@@ -294,7 +294,7 @@ impl<
         PROPOSAL: ProposalType<NodeType = TYPES>,
         ELECTION: Election<TYPES>,
     > TestableNetworkingImplementation<TYPES, LEAF, PROPOSAL, ELECTION>
-    for MemoryCommChannel<TYPES, LEAF, PROPOSAL>
+    for MemoryCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 where
     TYPES::SignatureKey: TestableSignatureKey,
 {
@@ -311,7 +311,7 @@ where
                 NoMetrics::new(),
                 master.clone(),
                 None,
-            ))
+            ), PhantomData)
         })
     }
 
@@ -451,7 +451,8 @@ pub struct MemoryCommChannel<
     TYPES: NodeType,
     LEAF: LeafType<NodeType = TYPES>,
     PROPOSAL: ProposalType<NodeType = TYPES>,
->(MemoryNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>);
+    ELECTION: Election<TYPES>,
+>(MemoryNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>, PhantomData<ELECTION>);
 
 #[async_trait]
 impl<
@@ -460,7 +461,7 @@ impl<
         PROPOSAL: ProposalType<NodeType = TYPES>,
         ELECTION: Election<TYPES>,
     > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION>
-    for MemoryCommChannel<TYPES, LEAF, PROPOSAL>
+    for MemoryCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 {
     async fn ready_blocking(&self) -> bool {
         self.0.ready_blocking().await

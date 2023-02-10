@@ -365,7 +365,7 @@ impl CliStandalone {
 type ThisLeaf = ValidatingLeaf<DEntryTypes>;
 type ThisElection =
     GeneralStaticCommittee<DEntryTypes, ThisLeaf, <DEntryTypes as NodeType>::SignatureKey>;
-type ThisNetworking = Libp2pCommChannel<DEntryTypes, ThisLeaf, ThisProposal>;
+type ThisNetworking = Libp2pCommChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>;
 type ThisProposal = ValidatingProposal<DEntryTypes, ThisElection>;
 type Node = DEntryNode<ThisNetworking, ThisElection>;
 

@@ -36,7 +36,7 @@ use tracing::{debug, error, instrument};
 type ThisLeaf = ValidatingLeaf<DEntryTypes>;
 type ThisElection =
     GeneralStaticCommittee<DEntryTypes, ThisLeaf, <DEntryTypes as NodeType>::SignatureKey>;
-type ThisNetworking = CentralizedCommChannel<DEntryTypes>;
+type ThisNetworking = CentralizedCommChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>;
 #[allow(dead_code)]
 type ThisProposal = ValidatingProposal<DEntryTypes, ThisElection>;
 type Node = DEntryNode<ThisNetworking, ThisElection>;
