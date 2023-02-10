@@ -581,7 +581,7 @@ async fn main() {
 
             for _ in 0..config.num_txn_per_round {
                 let txn =
-                    <DEntryState as TestableState>::create_random_transaction(&state, &mut rng);
+                    <DEntryState as TestableState>::create_random_transaction(&state, &mut rng, 0);
                 info!("Submitting txn on view {}", view);
                 hotshot.submit_transaction(txn).await.unwrap();
             }
@@ -632,7 +632,7 @@ async fn main() {
                 total_time_in_seconds: online_time.as_secs_f64(),
                 transaction_size_bytes: 0,
                 transactions_rejected: 0,
-                transactions_submitted: total_txns,
+                transactions_submitted: total_txns as usize,
             }))
             .await
             .expect("Could not report results to the server");

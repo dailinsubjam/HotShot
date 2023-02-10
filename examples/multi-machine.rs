@@ -1,15 +1,16 @@
-use std::{net::IpAddr, str::FromStr, ops::Deref, time::Duration, num::NonZeroUsize, sync::Arc};
+use std::{net::IpAddr, str::FromStr, ops::Deref, time::{Duration, Instant}, num::NonZeroUsize, sync::Arc, mem, collections::VecDeque, cmp};
 
 use async_compatibility_layer::{logging::{setup_logging, setup_backtrace}, art::{TcpStream, async_sleep}};
 use async_lock::RwLock;
+use async_trait::async_trait;
 use clap::Parser;
-use hotshot::{types::{SignatureKey, HotShotHandle}, traits::{NetworkError, election::static_committee::{GeneralStaticCommittee, StaticElectionConfig}, implementations::{Libp2pCommChannel, CentralizedCommChannel, Libp2pNetwork}}, demos::dentry::{DEntryTypes, DEntryNode, DEntryState, DEntryTransaction}};
-use hotshot_centralized_server::{Run, TcpStreamUtil, TcpStreamUtilWithRecv, ToServer, FromServer, TcpStreamUtilWithSend, NetworkConfig};
-use hotshot_types::{traits::{node_implementation::NodeType, network::CommunicationChannel, metrics::NoMetrics}, data::{ValidatingLeaf, ValidatingProposal}, HotShotConfig};
-use libp2p::{Multiaddr, multiaddr::{self, Protocol}, PeerId, identity::{Keypair, ed25519::{SecretKey, Keypair as EdKeypair}}};
+use hotshot::{types::{SignatureKey, HotShotHandle}, traits::{NetworkError, election::static_committee::{GeneralStaticCommittee, StaticElectionConfig}, implementations::{Libp2pCommChannel, CentralizedCommChannel, Libp2pNetwork}, NodeImplementation}, demos::dentry::{DEntryTypes, DEntryNode, DEntryState, DEntryTransaction}};
+use hotshot_centralized_server::{Run, TcpStreamUtil, TcpStreamUtilWithRecv, ToServer, FromServer, TcpStreamUtilWithSend, NetworkConfig, RunResults, config::Libp2pConfig};
+use hotshot_types::{traits::{node_implementation::NodeType, network::CommunicationChannel, metrics::NoMetrics, state::{TestableState, TestableBlock}, election::Election}, data::{ValidatingLeaf, ValidatingProposal, TestableLeaf}, HotShotConfig};
+use libp2p::{Multiaddr, multiaddr::{self, Protocol}, PeerId, identity::{Keypair, ed25519::{SecretKey, Keypair as EdKeypair}}, kad::kbucket::Node};
 use libp2p_networking::network::{NetworkNodeType, MeshParams, NetworkNodeConfigBuilder};
 use nll::nll_todo::nll_todo;
-use tracing::{instrument, error};
+use tracing::{instrument, error, debug};
 
 type ThisLeaf = ValidatingLeaf<DEntryTypes>;
 type ThisElection =
@@ -88,6 +89,13 @@ struct CliOrchestrated {
 enum CliOpt {
     Libp2p(CliOrchestrated),
     Centralized(CliOrchestrated),
+}
+
+/// TODO only constrain networking
+impl CliConfig<_, _, _, _> for Libp2pConfig {
+}
+
+impl CliConfig<_, _, _, _> for CentralizedConfig {
 }
 
 impl CliOpt {
@@ -230,12 +238,12 @@ impl CliOpt {
     }
 }
 
-pub struct Libp2pClientConfig {
+pub struct Libp2pClientConfig<TYPES: NodeType> {
     bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
     /// for hotshot layer
-    privkey: <<DEntryTypes as NodeType>::SignatureKey as SignatureKey>::PrivateKey,
+    privkey: <<TYPES as NodeType>::SignatureKey as SignatureKey>::PrivateKey,
     /// for hotshot layer
-    pubkey: <DEntryTypes as NodeType>::SignatureKey,
+    pubkey: <TYPES as NodeType>::SignatureKey,
     node_type: NetworkNodeType,
     bound_addr: Multiaddr,
     /// for libp2p layer
@@ -245,33 +253,31 @@ pub struct Libp2pClientConfig {
     network: Libp2pNetworking,
     //TODO do we need this? I don't think so
     run: Run,
-    config: NetworkConfig<<DEntryTypes as NodeType>::SignatureKey, <DEntryTypes as NodeType>::ElectionConfigType>
+    config: NetworkConfig<<TYPES as NodeType>::SignatureKey, <TYPES as NodeType>::ElectionConfigType>
 }
 
-pub enum Config {
-    Libp2pConfig(Libp2pClientConfig),
-    CentralizedConfig(CentralizedConfig),
+pub enum Config<TYPES: NodeType> {
+    Libp2pConfig(Libp2pClientConfig<TYPES>),
+    CentralizedConfig(CentralizedConfig<TYPES>),
 }
 
-pub struct CentralizedConfig {
-    config: NetworkConfig<<DEntryTypes as NodeType>::SignatureKey, ThisElection>,
+pub struct CentralizedConfig<TYPES: NodeType> {
+    config: NetworkConfig<TYPES::SignatureKey, TYPES::ElectionConfigType>,
     network: CentralizedNetworking,
     run: Run
 }
 
 impl Config {
-    pub async fn get_network(&self) -> Box<dyn CommunicationChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>> {
-        match self {
-            Config::Libp2pConfig(c) => Box::new(c.network),
-            Config::CentralizedConfig(c) => Box::new(c.network),
-        }
-    }
-
-
     pub async fn wait_for_ready(&self) {
+        // FIXME there's absolutely got to be a better way to do this
+        // I tried `get_network` but network isn't object safe
+        // so that's no good.
+        // maybe a trait based approach?
         match self {
             Config::Libp2pConfig(config) => {
-                nll_todo()
+                while !CommunicationChannel::<_, _, _, ThisElection>::ready_nonblocking(&config.network).await {
+                    async_sleep(Duration::from_secs(1)).await;
+                }
             }
             Config::CentralizedConfig(config) => {
                 let node_count = config.config.config.total_nodes;
@@ -279,7 +285,7 @@ impl Config {
                 // for a finer grained logging about which nodes
                 // are "ready to go"TM
                 // FIXME we should add this to the commchannel/network API
-                while !config.network.run_ready() {
+                while !CommunicationChannel::<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>::ready_nonblocking(&config.network).await {
                     let connected_clients = config.network.get_connected_client_count().await;
                     error!("{} / {}", connected_clients, node_count);
                     async_sleep(Duration::from_secs(1)).await;
@@ -301,12 +307,136 @@ impl Config {
         }
     }
 
-    pub async fn run_consensus(&self) {
-        // let size = mem::size_of::<<DEntryTypes as NodeType>::Transaction>();
-        // let adjusted_padding = if padding < size { 0 } else { padding - size };
-        nll_todo()
-    }
 }
+
+#[async_trait]
+pub trait CliConfig<
+    TYPES: NodeType,
+    ELECTION: Election<TYPES>,
+    NETWORK: CommunicationChannel<DEntryTypes, ThisLeaf, ThisProposal, ThisElection>,
+    NODE: NodeImplementation<TYPES, Leaf=ValidatingLeaf<TYPES>, Proposal = ValidatingProposal<TYPES, ELECTION>>
+>
+    where
+        <TYPES as NodeType>::StateType : TestableState,
+        <TYPES as NodeType>::BlockType : TestableBlock,
+        ValidatingLeaf<TYPES> : TestableLeaf,
+{
+    async fn wait_for_ready(&self);
+
+    async fn init_state_and_hotshot(&self) -> (DEntryState, HotShotHandle<DEntryTypes, DEntryNode<NETWORK, ThisElection>>);
+
+    async fn run_consensus(&self, mut hotshot: HotShotHandle<TYPES, NODE>) -> RunResults {
+        let NetworkConfig {
+            padding,
+            rounds,
+            transactions_per_round,
+            node_index,
+            config: HotShotConfig { total_nodes, .. },
+            ..
+        } = self.get_config();
+
+        let size = mem::size_of::<TYPES::Transaction>();
+        let adjusted_padding = if padding < size { 0 } else { padding - size };
+        let mut txns: VecDeque<TYPES::Transaction> = VecDeque::new();
+        let state = hotshot.get_state().await;
+
+        // This assumes that no node will be a leader more than 5x the expected number of times they should be the leader
+        // FIXME  is this a reasonable assumption when we start doing DA?
+        let tx_to_gen = transactions_per_round * (cmp::max(rounds / total_nodes, 1) + 5);
+        error!("Generated {} transactions", tx_to_gen);
+        {
+            let mut txn_rng = rand::thread_rng();
+            for _ in 0..tx_to_gen {
+                // TODO make this u64...
+                let txn = <<TYPES as NodeType>::StateType as TestableState>::create_random_transaction(&state, &mut txn_rng, padding as u64);
+                txns.push_back(txn);
+            }
+        }
+
+        error!("Adjusted padding size is = {:?}", adjusted_padding);
+        let mut timed_out_views: u64 = 0;
+        let mut round = 1;
+        let mut total_transactions = 0;
+
+        let start = Instant::now();
+
+        error!("Starting hotshot!");
+        hotshot.start().await;
+        while round <= rounds {
+            debug!(?round);
+            error!("Round {}:", round);
+
+            let num_submitted = if node_index == ((round % total_nodes) as u64) {
+                tracing::info!("Generating txn for round {}", round);
+
+                for _ in 0..transactions_per_round {
+                    let txn = txns.pop_front().unwrap();
+                    tracing::info!("Submitting txn on round {}", round);
+                    hotshot.submit_transaction(txn).await.unwrap();
+                }
+                transactions_per_round
+            } else {
+                0
+            };
+            error!("Submitting {} transactions", num_submitted);
+
+            // Start consensus
+            error!("  - Waiting for consensus to occur");
+            debug!("Waiting for consensus to occur");
+
+            let view_results = hotshot.collect_round_events().await;
+
+            match view_results {
+                Ok((state, blocks)) => {
+                    if let Some(state) = state.get(0) {
+                        // for (account, balance) in &state.balances {
+                            // debug!("    - {}: {}", account, balance);
+                        // }
+                    }
+                    for block in blocks {
+                        total_transactions += block.txn_count();
+                    }
+                }
+                Err(e) => {
+                    timed_out_views += 1;
+                    error!("View: {:?}, failed with : {:?}", round, e);
+                }
+            }
+
+            round += 1;
+        }
+
+        let total_time_elapsed = start.elapsed();
+        let expected_transactions = transactions_per_round * rounds;
+        let total_size = total_transactions * (padding as u64);
+        error!("All {rounds} rounds completed in {total_time_elapsed:?}");
+        error!("{timed_out_views} rounds timed out");
+
+        // This assumes all submitted transactions make it through consensus:
+        error!(
+            "{} total bytes submitted in {:?}",
+            total_size, total_time_elapsed
+            );
+        debug!("All rounds completed");
+
+        RunResults {
+            // FIXME nuke this field since we're not doing this anymore.
+            run: nll_todo(),
+            node_index,
+
+            transactions_submitted: total_transactions as usize,
+            transactions_rejected: expected_transactions - (total_transactions as usize),
+            transaction_size_bytes: (total_size as usize),
+
+            rounds_succeeded: rounds as u64 - timed_out_views,
+            rounds_timed_out: timed_out_views,
+            total_time_in_seconds: total_time_elapsed.as_secs_f64(),
+        }
+    }
+
+    fn get_config(&self) -> NetworkConfig<<DEntryTypes as NodeType>::SignatureKey, <DEntryTypes as NodeType>::ElectionConfigType>;
+}
+
 
 #[cfg_attr(
     feature = "tokio-executor",
@@ -318,15 +448,15 @@ async fn main() {
     setup_logging();
     setup_backtrace();
 
-    let mut rng = rand::thread_rng();
+    // let mut rng = rand::thread_rng();
+    //
+    // let args = CliOpt::parse();
+    //
+    // let config = args.init().await.unwrap();
+    //
+    // config.wait_for_ready().await;
 
-    let args = CliOpt::parse();
-
-    let config = args.init().await.unwrap();
-
-    config.wait_for_ready().await;
-
-    config.run_consensus().await;
+    // config.run_consensus().await;
 
     // let config: Config = match args {
     //     CliOpt::Libp2p(_) => todo!(),

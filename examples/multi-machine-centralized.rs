@@ -166,7 +166,7 @@ async fn main() {
     let tx_to_gen = transactions_per_round * (cmp::max(rounds / node_count, 1) + 5);
     error!("Generated {} transactions", tx_to_gen);
     for _ in 0..tx_to_gen {
-        let mut txn = <DEntryState as TestableState>::create_random_transaction(&state, &mut rng);
+        let mut txn = <DEntryState as TestableState>::create_random_transaction(&state, &mut rng, 0);
         txn.padding = vec![0; adjusted_padding];
         txs.push_back(txn);
     }
@@ -207,9 +207,10 @@ async fn main() {
         match view_results {
             Ok((state, blocks)) => {
                 if let Some(state) = state.get(0) {
-                    for (account, balance) in &state.balances {
-                        debug!("    - {}: {}", account, balance);
-                    }
+                    debug!("state: {state:?}");
+                    // for (account, balance) in &state.balances {
+                    //     debug!("    - {}: {}", account, balance);
+                    // }
                 }
                 for block in blocks {
                     total_transactions += block.txn_count();
@@ -227,7 +228,7 @@ async fn main() {
     // Print metrics
     let total_time_elapsed = start.elapsed();
     let expected_transactions = transactions_per_round * rounds;
-    let total_size = total_transactions * padding;
+    let total_size = total_transactions * (padding as u64);
     error!("All {rounds} rounds completed in {total_time_elapsed:?}");
     error!("{timed_out_views} rounds timed out");
 
@@ -240,17 +241,19 @@ async fn main() {
 
     let networking: &ThisNetworking = hotshot.networking();
     networking
-        .send_results(RunResults {
+        .send_results(
+            RunResults {
             run,
             node_index,
 
-            transactions_submitted: total_transactions,
-            transactions_rejected: expected_transactions - total_transactions,
-            transaction_size_bytes: total_size,
+            transactions_submitted: (total_transactions as usize),
+            transactions_rejected: expected_transactions - (total_transactions as usize),
+            transaction_size_bytes: total_size as usize,
 
             rounds_succeeded: rounds as u64 - timed_out_views,
             rounds_timed_out: timed_out_views,
             total_time_in_seconds: total_time_elapsed.as_secs_f64(),
-        })
+        }
+        )
         .await;
 }
