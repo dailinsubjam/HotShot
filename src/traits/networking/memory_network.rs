@@ -34,10 +34,11 @@ use snafu::ResultExt;
 use std::{
     collections::BTreeSet,
     fmt::Debug,
+    marker::PhantomData,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
-    }, marker::PhantomData,
+    },
 };
 use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 
@@ -306,12 +307,10 @@ where
         Box::new(move |node_id| {
             let privkey = TYPES::SignatureKey::generate_test_key(node_id);
             let pubkey = TYPES::SignatureKey::from_private(&privkey);
-            MemoryCommChannel(MemoryNetwork::new(
-                pubkey,
-                NoMetrics::new(),
-                master.clone(),
-                None,
-            ), PhantomData)
+            MemoryCommChannel(
+                MemoryNetwork::new(pubkey, NoMetrics::new(), master.clone(), None),
+                PhantomData,
+            )
         })
     }
 
@@ -452,7 +451,10 @@ pub struct MemoryCommChannel<
     LEAF: LeafType<NodeType = TYPES>,
     PROPOSAL: ProposalType<NodeType = TYPES>,
     ELECTION: Election<TYPES>,
->(MemoryNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>, PhantomData<ELECTION>);
+>(
+    MemoryNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>,
+    PhantomData<ELECTION>,
+);
 
 #[async_trait]
 impl<

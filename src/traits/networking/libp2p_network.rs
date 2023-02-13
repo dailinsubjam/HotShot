@@ -39,10 +39,11 @@ use serde::Serialize;
 use snafu::ResultExt;
 use std::{
     collections::{BTreeSet, HashSet},
+    marker::PhantomData,
     num::NonZeroUsize,
     str::FromStr,
     sync::{atomic::AtomicBool, Arc},
-    time::Duration, marker::PhantomData,
+    time::Duration,
 };
 use tracing::{error, info, instrument};
 
@@ -475,8 +476,7 @@ impl<M: NetworkMsg, K: SignatureKey + 'static> ConnectedNetwork<M, K> for Libp2p
 
     #[instrument(name = "Libp2pNetwork::ready_nonblocking", skip_all)]
     async fn ready_nonblocking(&self) -> bool {
-        self
-            .inner
+        self.inner
             .is_ready
             .load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -672,7 +672,10 @@ pub struct Libp2pCommChannel<
     LEAF: LeafType<NodeType = TYPES>,
     PROPOSAL: ProposalType<NodeType = TYPES>,
     ELECTION: Election<TYPES>,
->(Libp2pNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>, PhantomData<ELECTION>);
+>(
+    Libp2pNetwork<Message<TYPES, LEAF, PROPOSAL>, TYPES::SignatureKey>,
+    PhantomData<ELECTION>,
+);
 
 impl<
         TYPES: NodeType,

@@ -454,7 +454,7 @@ impl TestableBlock for DEntryBlock {
     }
 
     fn txn_count(&self) -> u64 {
-        Self::txn_count(&self)
+        Self::txn_count(self)
     }
 }
 

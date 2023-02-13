@@ -42,13 +42,14 @@ use snafu::ResultExt;
 use std::{
     cmp,
     collections::{hash_map::Entry, BTreeSet, HashMap},
+    marker::PhantomData,
     net::{Ipv4Addr, SocketAddr},
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration, marker::PhantomData,
+    time::Duration,
 };
 use tracing::{error, instrument};
 
@@ -1080,11 +1081,12 @@ pub struct CentralizedCommChannel<
 );
 
 impl<
-    TYPES: NodeType,
-    LEAF: LeafType<NodeType = TYPES>,
-    PROPOSAL: ProposalType<NodeType = TYPES>,
-    ELECTION: Election<TYPES>,
-> CentralizedCommChannel<TYPES, LEAF, PROPOSAL, ELECTION> {
+        TYPES: NodeType,
+        LEAF: LeafType<NodeType = TYPES>,
+        PROPOSAL: ProposalType<NodeType = TYPES>,
+        ELECTION: Election<TYPES>,
+    > CentralizedCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
+{
     /// create new communication channel
     pub fn new(
         network: CentralizedServerNetwork<TYPES::SignatureKey, TYPES::ElectionConfigType>,
@@ -1114,7 +1116,8 @@ impl<
         LEAF: LeafType<NodeType = TYPES>,
         PROPOSAL: ProposalType<NodeType = TYPES>,
         ELECTION: Election<TYPES>,
-    > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION> for CentralizedCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
+    > CommunicationChannel<TYPES, LEAF, PROPOSAL, ELECTION>
+    for CentralizedCommChannel<TYPES, LEAF, PROPOSAL, ELECTION>
 {
     async fn ready_blocking(&self) -> bool {
         <CentralizedServerNetwork<_, _> as ConnectedNetwork<

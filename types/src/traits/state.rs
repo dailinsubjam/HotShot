@@ -123,7 +123,7 @@ where
     fn create_random_transaction(
         &self,
         rng: &mut dyn rand::RngCore,
-        padding: u64
+        padding: u64,
     ) -> <Self::BlockType as Block>::Transaction;
 }
 
