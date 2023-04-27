@@ -1,4 +1,8 @@
-use super::{FailedToSerializeSnafu, NetworkError, NetworkReliability, NetworkingMetrics};
+use super::{
+    memory_network::MemoryNetwork, FailedToSerializeSnafu, NetworkError, NetworkReliability,
+    NetworkingMetrics,
+};
+use crate::NodeImplementation;
 use async_compatibility_layer::{
     art::{async_sleep, async_spawn},
     channel::{bounded, Receiver, SendError, Sender},
@@ -8,6 +12,8 @@ use async_trait::async_trait;
 use bincode::Options;
 use dashmap::DashMap;
 use futures::StreamExt;
+use hotshot_types::traits::network::TestableChannelImplementation;
+use hotshot_types::traits::network::ViewMessage;
 use hotshot_types::{
     data::ProposalType,
     message::Message,
@@ -24,9 +30,6 @@ use hotshot_types::{
     vote::VoteType,
 };
 use hotshot_utils::bincode::bincode_opts;
-use hotshot_types::traits::network::TestableChannelImplementation;
-use crate::NodeImplementation;
-use hotshot_types::traits::network::ViewMessage;
 use rand::Rng;
 use snafu::ResultExt;
 use std::{
@@ -40,41 +43,56 @@ use std::{
 };
 use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 
-/// 
-#[derive(Clone)]
-pub struct CommunicationChannelWithFallback<
+/// A communication channel with 2 networks, where we can fall back to the slower network if the
+/// primary fails
+pub trait CommunicationChannelWithFallback<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
     PROPOSAL: ProposalType<NodeType = TYPES>,
     VOTE: VoteType<TYPES>,
     MEMBERSHIP: Membership<TYPES>,
-    PRIMARY: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
-    FALLBACK: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
-> {
-    network: PRIMARY,
-    fallback: FALLBACK,
-    pd: PhantomData<(I, PROPOSAL, VOTE, MEMBERSHIP)>,
+>
+{
+    type Primary: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>;
+    type Fallback: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>;
+
+    fn network(&self) -> Self::Primary;
+    fn fallback(&self) -> Self::Fallback;
 }
 
-impl<
-        TYPES: NodeType,
-        I: NodeImplementation<TYPES>,
-        PROPOSAL: ProposalType<NodeType = TYPES>,
-        VOTE: VoteType<TYPES>,
-        MEMBERSHIP: Membership<TYPES>,
-        PRIMARY: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
-        FALLBACK: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
-    > CommunicationChannelWithFallback<TYPES, I, PROPOSAL, VOTE, MEMBERSHIP, PRIMARY, FALLBACK>
-{
-    /// create new communication channel
-    #[must_use]
-    pub fn new(networks: (PRIMARY, FALLBACK)) -> Self {
-        Self { network: networks.0, fallback: networks.1, pd: PhantomData::default() }
-    }
-}
+// impl<
+//         TYPES: NodeType,
+//         I: NodeImplementation<TYPES>,
+//         PROPOSAL: ProposalType<NodeType = TYPES>,
+//         VOTE: VoteType<TYPES>,
+//         MEMBERSHIP: Membership<TYPES>,
+//         PRIMARY: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
+//         FALLBACK: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
+//     >
+//     CommunicationChannelWithFallback<
+//         TYPES,
+//         I,
+//         PROPOSAL,
+//         VOTE,
+//         MEMBERSHIP,
+//         Primary = PRIMARY,
+//         Fallback = FALLBACK,
+//     >
+// {
+//     /// create new communication channel
+//     #[must_use]
+//     pub fn new(networks: (PRIMARY, FALLBACK)) -> Self {
+//         Self {
+//             network: networks.0,
+//             fallback: networks.1,
+//             pd: PhantomData::default(),
+//         }
+//     }
+// }
 
 #[async_trait]
 impl<
+        T,
         TYPES: NodeType,
         I: NodeImplementation<TYPES>,
         PROPOSAL: ProposalType<NodeType = TYPES>,
@@ -82,23 +100,39 @@ impl<
         MEMBERSHIP: Membership<TYPES>,
         PRIMARY: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
         FALLBACK: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
-    > CommunicationChannel<TYPES, Message<TYPES, I>, PROPOSAL, VOTE, MEMBERSHIP>
-    for CommunicationChannelWithFallback<TYPES, I, PROPOSAL, VOTE, MEMBERSHIP, PRIMARY, FALLBACK>
+    >
+    CommunicationChannel<
+        TYPES,
+        Message<TYPES, I>,
+        PROPOSAL,
+        VOTE,
+        MEMBERSHIP,
+    > for T
+where
+    T: CommunicationChannelWithFallback<
+        TYPES,
+        I,
+        PROPOSAL,
+        VOTE,
+        MEMBERSHIP,
+        Primary = PRIMARY,
+        Fallback = FALLBACK,
+    >,
 {
     type NETWORK = (PRIMARY, FALLBACK);
 
     async fn wait_for_ready(&self) {
-        self.network.wait_for_ready().await;
-        self.fallback.wait_for_ready().await
+        self.network().wait_for_ready().await;
+        self.fallback().wait_for_ready().await
     }
 
     async fn is_ready(&self) -> bool {
-        self.network.is_ready().await && self.fallback.is_ready().await
+        self.network().is_ready().await && self.fallback().is_ready().await
     }
 
     async fn shut_down(&self) -> () {
-        self.network.shut_down().await;
-        self.fallback.shut_down().await;
+        self.network().shut_down().await;
+        self.fallback().shut_down().await;
     }
 
     async fn broadcast_message(
@@ -109,8 +143,8 @@ impl<
         let recipients =
             <MEMBERSHIP as Membership<TYPES>>::get_committee(election, message.get_view_number());
         /// TODO return no error if either succeeds
-        self.fallback.broadcast_message(message, recipients).await;
-        self.network.broadcast_message(message, recipients).await
+        self.fallback().broadcast_message(message, recipients).await;
+        self.network().broadcast_message(message, recipients).await
     }
 
     async fn direct_message(
@@ -118,11 +152,11 @@ impl<
         message: Message<TYPES, I>,
         recipient: TYPES::SignatureKey,
     ) -> Result<(), NetworkError> {
-        match self.network.direct_message(message, recipient).await {
+        match self.network().direct_message(message, recipient).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 // TODO log e
-                self.fallback.direct_message(message, recipient).await
+                self.fallback().direct_message(message, recipient).await
             }
         }
     }
@@ -131,21 +165,21 @@ impl<
         &self,
         transmit_type: TransmitType,
     ) -> Result<Vec<Message<TYPES, I>>, NetworkError> {
-        match self.network.recv_msgs(transmit_type).await {
+        match self.network().recv_msgs(transmit_type).await {
             Ok(msgs) => Ok(msgs),
             Err(e) => {
                 // TODO log e
-                self.fallback.recv_msgs(transmit_type).await
+                self.fallback().recv_msgs(transmit_type).await
             }
         }
     }
 
     async fn lookup_node(&self, pk: TYPES::SignatureKey) -> Result<(), NetworkError> {
-        match self.network.lookup_node(pk).await {
+        match self.network().lookup_node(pk).await {
             Ok(msgs) => Ok(msgs),
             Err(e) => {
                 // TODO log e
-                self.fallback.lookup_node(pk).await
+                self.fallback().lookup_node(pk).await
             }
         }
     }
@@ -156,33 +190,86 @@ impl<
     }
 }
 
+// impl<
+//         TYPES: NodeType,
+//         I: NodeImplementation<TYPES>,
+//         PROPOSAL: ProposalType<NodeType = TYPES>,
+//         VOTE: VoteType<TYPES>,
+//         MEMBERSHIP: Membership<TYPES>,
+//         PRIMARY: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
+//         FALLBACK: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
+//     >
+//     TestableChannelImplementation<
+//         TYPES,
+//         Message<TYPES, I>,
+//         PROPOSAL,
+//         VOTE,
+//         MEMBERSHIP,
+//         (PRIMARY, FALLBACK),
+//     >
+//     where T: CommunicationChannelWithFallback<
+//         TYPES,
+//         I,
+//         PROPOSAL,
+//         VOTE,
+//         MEMBERSHIP,
+//         Primary = PRIMARY,
+//         Fallback = FALLBACK,
+//     >
+// where
+//     TYPES::SignatureKey: TestableSignatureKey,
+// {
+//     fn generate_network() -> Box<dyn Fn(Arc<Self::NETWORK>) -> Self + 'static> {
+//         Box::new(move |network| CommunicationChannelWithFallback::new(network))
+//     }
+// }
+
+type BasicMemoryNetwork<TYPES: NodeType, I> = MemoryNetwork<Message<TYPES, I>, TYPES::SignatureKey>;
+struct MemoryMemoryFallbackCommChannel<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    PROPOSAL: ProposalType<NodeType = TYPES>,
+    VOTE: VoteType<TYPES>,
+    MEMBERSHIP: Membership<TYPES>,
+> {
+    networks: Arc<(BasicMemoryNetwork<TYPES, I>, BasicMemoryNetwork<TYPES, I>)>,
+    _pd: PhantomData<(I, PROPOSAL, VOTE, MEMBERSHIP)>,
+}
+
 impl<
         TYPES: NodeType,
         I: NodeImplementation<TYPES>,
         PROPOSAL: ProposalType<NodeType = TYPES>,
         VOTE: VoteType<TYPES>,
         MEMBERSHIP: Membership<TYPES>,
-        PRIMARY: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
-        FALLBACK: ConnectedNetwork<Message<TYPES, I>, TYPES::SignatureKey>,
-    >
-    TestableChannelImplementation<
-        TYPES,
-        Message<TYPES, I>,
-        PROPOSAL,
-        VOTE,
-        MEMBERSHIP,
-        (PRIMARY, FALLBACK),
-    > for CommunicationChannelWithFallback<TYPES, I, PROPOSAL, VOTE, MEMBERSHIP, PRIMARY, FALLBACK>
-where
-    TYPES::SignatureKey: TestableSignatureKey,
+    > MemoryMemoryFallbackCommChannel<TYPES, I, PROPOSAL, VOTE, MEMBERSHIP>
 {
-    fn generate_network() -> Box<
-        dyn Fn(
-                Arc<Self::NETWORK>,
-            ) -> Self
-            + 'static,
-    > {
-        Box::new(move |network| CommunicationChannelWithFallback::new(network))
+    #[must_use]
+    pub fn new(
+        networks: Arc<(BasicMemoryNetwork<TYPES, I>, BasicMemoryNetwork<TYPES, I>)>,
+    ) -> Self {
+        Self {
+            networks,
+            _pd: PhantomData::default(),
+        }
+    }
+}
+
+impl<
+        TYPES: NodeType,
+        I: NodeImplementation<TYPES>,
+        PROPOSAL: ProposalType<NodeType = TYPES>,
+        VOTE: VoteType<TYPES>,
+        MEMBERSHIP: Membership<TYPES>,
+    > CommunicationChannelWithFallback<TYPES, I, PROPOSAL, VOTE, MEMBERSHIP>
+    for MemoryMemoryFallbackCommChannel<TYPES, I, PROPOSAL, VOTE, MEMBERSHIP>
+{
+    fn fallback(&self) -> Self::Fallback {
+        self.networks.1
+    }
+
+    fn network(&self) -> Self::Primary {
+        self.networks.0
     }
 }
 
@@ -193,11 +280,16 @@ mod tests {
     use super::*;
     use crate::{
         demos::vdemo::{Addition, Subtraction, VDemoBlock, VDemoState, VDemoTransaction},
-        traits::{election::static_committee::{
-            GeneralStaticCommittee, StaticElectionConfig, StaticVoteToken,
-        }, networking::memory_network::MemoryNetwork},
+        traits::{
+            election::static_committee::{
+                GeneralStaticCommittee, StaticElectionConfig, StaticVoteToken,
+            },
+            networking::memory_network::MemoryNetwork,
+        },
     };
 
+    use crate::traits::implementations::MasterMap;
+    use crate::traits::implementations::MemoryCommChannel;
     use crate::traits::implementations::MemoryStorage;
     use async_compatibility_layer::logging::setup_logging;
     use hotshot_types::traits::election::QuorumExchange;
@@ -214,8 +306,6 @@ mod tests {
         data::{ValidatingLeaf, ValidatingProposal},
         traits::state::ValidatingConsensus,
     };
-    use crate::traits::implementations::MemoryCommChannel;
-    use crate::traits::implementations::MasterMap;
     #[derive(
         Copy,
         Clone,
@@ -249,12 +339,13 @@ mod tests {
 
     type TestMembership = GeneralStaticCommittee<Test, TestLeaf, Ed25519Pub>;
     type Network = MemoryNetwork<Message<Test, TestImpl>, Ed25519Pub>;
-    type TestNetwork = CommunicationChannelWithFallback<Test, TestImpl, TestProposal, TestVote, TestMembership, Network, Network>;
+    type TestNetwork =
+        MemoryMemoryFallbackCommChannel<Test, TestImpl, TestProposal, TestVote, TestMembership>;
 
     impl NodeImplementation<Test> for TestImpl {
         type QuorumExchange = QuorumExchange<
             Test,
-            TestLeaf,  
+            TestLeaf,
             TestProposal,
             TestMembership,
             TestNetwork,
@@ -340,11 +431,12 @@ mod tests {
             MemoryNetwork::new(pub_key_1, NoMetrics::boxed(), group.clone(), Option::None);
         let pub_key_2 = get_pubkey();
         let network2 = MemoryNetwork::new(pub_key_2, NoMetrics::boxed(), group, Option::None);
-        let fallback1 = MemoryNetwork::new(pub_key_1, NoMetrics::boxed(), group2.clone(), Option::None);
+        let fallback1 =
+            MemoryNetwork::new(pub_key_1, NoMetrics::boxed(), group2.clone(), Option::None);
         let fallback2 = MemoryNetwork::new(pub_key_2, NoMetrics::boxed(), group2, Option::None);
-        
+
         let comm1 = CommunicationChannelWithFallback::new((network1, fallback1));
-        let comm1 = CommunicationChannelWithFallback::new((network2, fallback2));
+        let comm2 = CommunicationChannelWithFallback::new((network2, fallback2));
 
         let first_messages: Vec<Message<Test, TestImpl>> = gen_messages(5, 100, pub_key_1);
 
