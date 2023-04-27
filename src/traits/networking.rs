@@ -9,6 +9,7 @@ pub mod centralized_server_network;
 pub mod libp2p_network;
 pub mod memory_network;
 pub mod web_server_network;
+pub mod combined_channels;
 
 pub use hotshot_types::traits::network::{
     ChannelSendSnafu, CouldNotDeliverSnafu, FailedToDeserializeSnafu, FailedToSerializeSnafu,

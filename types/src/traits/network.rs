@@ -270,7 +270,7 @@ pub trait TestableChannelImplementation<
     PROPOSAL: ProposalType<NodeType = TYPES>,
     VOTE: VoteType<TYPES>,
     MEMBERSHIP: Membership<TYPES>,
-    NETWORK: ConnectedNetwork<M, TYPES::SignatureKey>,
+    NETWORK,
 >: CommunicationChannel<TYPES, M, PROPOSAL, VOTE, MEMBERSHIP>
 {
     /// generates the `CommunicationChannel` given it's associated network type
