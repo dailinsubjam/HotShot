@@ -20,7 +20,7 @@ use tide_disco::method::WriteState;
 use tide_disco::Api;
 use tide_disco::App;
 use tide_disco::StatusCode;
-use tracing::{error, info};
+use tracing::{error, warn, info};
 
 type State<KEY> = RwLock<WebServerState<KEY>>;
 type Error = ServerError;
@@ -300,7 +300,7 @@ impl<KEY: SignatureKey> WebServerDataSource<KEY> for WebServerState<KEY> {
     }
     /// Stores a received proposal in the `WebServerState`
     fn post_proposal(&mut self, view_number: u64, mut proposal: Vec<u8>) -> Result<(), Error> {
-        error!("Received proposal for view {}", view_number);
+        warn!("Received proposal for view {}", view_number);
 
         // Only keep proposal history for MAX_VIEWS number of view
         if self.proposals.len() >= MAX_VIEWS {
@@ -348,7 +348,7 @@ impl<KEY: SignatureKey> WebServerDataSource<KEY> for WebServerState<KEY> {
 
     /// Stores a received DA certificate in the `WebServerState`
     fn post_da_certificate(&mut self, view_number: u64, mut cert: Vec<u8>) -> Result<(), Error> {
-        error!("Received DA Certificate for view {}", view_number);
+        warn!("Received DA Certificate for view {}", view_number);
 
         // Only keep proposal history for MAX_VIEWS number of view
         if self.da_certificates.len() >= MAX_VIEWS {

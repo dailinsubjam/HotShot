@@ -53,11 +53,11 @@ impl Default for TestMetadata {
         Self {
             timing_data: TimingData::default(),
             min_transactions: 0,
-            total_nodes: 5,
-            start_nodes: 5,
+            total_nodes: 10,
+            start_nodes: 10,
             // failure_threshold: 10,
-            num_bootstrap_nodes: 5,
-            da_committee_size: 5,
+            num_bootstrap_nodes: 10,
+            da_committee_size: 10,
             per_node_safety_properties: NodeSafetyPropertiesDescription {
                 // TODO Update these numbers
                 num_failed_views: Some(5),

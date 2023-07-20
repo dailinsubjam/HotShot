@@ -24,7 +24,8 @@ use hotshot_types::{
 };
 use nll::nll_todo::nll_todo;
 use snafu::Snafu;
-use tracing::log::warn;
+use tracing::log::{warn, error};
+use hotshot_types::data::LeafType;
 
 use crate::test_errors::ConsensusTestError;
 
@@ -217,6 +218,10 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES::ConsensusType, TYPES>
                                         );
                                     }
                                     EventType::Decide { leaf_chain, qc } => {
+                                        if let Some(leaf) = leaf_chain.get(0) {
+                                            error!("Decide event for leaf: {}", *leaf.get_view_number());
+                                            error!("Chain lenght = {}", leaf_chain.len());
+                                        }
                                         // for leaf in leaf_chain {
                                         // TODO how to test this
                                         // }

@@ -533,7 +533,7 @@ where
                 .await;
 
             if self.quorum_exchange.is_leader(self.cur_view + 1) {
-                error!("Polling for quorum votes for view {}", *self.cur_view);
+                // error!("Polling for quorum votes for view {}", *self.cur_view);
                 self.quorum_exchange
                     .network()
                     .inject_consensus_info((ConsensusIntentEvent::PollForVotes(*self.cur_view)))
@@ -573,7 +573,7 @@ where
     pub async fn handle_event(&mut self, event: SequencingHotShotEvent<TYPES, I>) {
         match event {
             SequencingHotShotEvent::QuorumProposalRecv(proposal, sender) => {
-                error!(
+                warn!(
                     "Receved Quorum Propsoal for view {}",
                     *proposal.data.view_number
                 );
@@ -870,10 +870,8 @@ where
                             }
 
                             // warn!("Inserting leaf into storage {:?}", leaf.commit());
-                            if *view % 10 == 0 && self.quorum_exchange.is_leader(view) {
-                                error!("Sending Decide for view {:?}", consensus.last_decided_view);
-                                error!("Decided txns {:?}", included_txns_set)
-                            }
+                                // error!("Sending Decide for view {:?}", consensus.last_decided_view);
+                                // error!("Decided txns {:?}", included_txns_set)
                             decide_sent.await;
                         }
 
@@ -1058,7 +1056,7 @@ where
                 // warn!("Handle qc formed event!");
                 // TODO ED Why isn't cur view correct here?
                 // // So we don't create a QC on the first view unless we are the leader
-                error!(
+                warn!(
                     "Attempting to publish proposal after forming a QC for view {}",
                     *qc.view_number
                 );
@@ -1212,7 +1210,7 @@ where
                     .network()
                     .inject_consensus_info((ConsensusIntentEvent::CancelPollForVotes(*view)))
                     .await;
-                error!(
+                warn!(
                     "We received a timeout event in the consensus task for view {}!",
                     *view
                 )
@@ -1326,7 +1324,7 @@ where
             data: proposal,
             signature,
         };
-        error!("Sending proposal for view {:?} \n {:?}", self.cur_view, "");
+        warn!("Sending proposal for view {:?} \n {:?}", self.cur_view, "");
 
         // warn!("Sending proposal for view {:?}", message.data.clone());
 

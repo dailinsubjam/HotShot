@@ -430,7 +430,7 @@ where
                     // panic!("We are not the DA leader for view {}", *self.cur_view + 1);
                     return None;
                 }
-                error!("Polling for DA votes for view {}", *self.cur_view + 1);
+                warn!("Polling for DA votes for view {}", *self.cur_view + 1);
 
                 // Start polling for DA votes for the "next view"
                 self.committee_exchange

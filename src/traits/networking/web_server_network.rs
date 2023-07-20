@@ -326,7 +326,7 @@ impl<M: NetworkMsg, KEY: SignatureKey, ELECTIONCONFIG: ElectionConfig, TYPES: No
                                 panic!("Wrong event view number was sent to this task!");
                             } else {
                                 // Shutdown this task
-                                error!("Shutting down polling task for view {}", event_view);
+                                warn!("Shutting down polling task for view {}", event_view);
                                 return Ok(());
                             }
                         }
@@ -1075,7 +1075,7 @@ impl<
     }
 
     async fn inject_consensus_info(&self, event: ConsensusIntentEvent) -> Result<(), NetworkError> {
-        error!(
+        warn!(
             "Injecting event: {:?} is da {}",
             event.clone(),
             self.inner.is_da
