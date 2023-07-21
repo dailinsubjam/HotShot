@@ -18,14 +18,14 @@ use hotshot_task::{
     },
     task_impls::{HSTWithEvent, HSTWithEventAndMessage, TaskBuilder},
 };
+use hotshot_types::data::LeafType;
 use hotshot_types::{
     event::{Event, EventType},
     traits::node_implementation::NodeType,
 };
 use nll::nll_todo::nll_todo;
 use snafu::Snafu;
-use tracing::log::{warn, error};
-use hotshot_types::data::LeafType;
+use tracing::log::{error, warn};
 
 use crate::test_errors::ConsensusTestError;
 
@@ -217,9 +217,12 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES::ConsensusType, TYPES>
                                             ViewStatus::ViewFailed(ViewFailed(error)),
                                         );
                                     }
-                                    EventType::Decide { leaf_chain, qc } => {
+                                    EventType::Decide { leaf_chain, qc, .. } => {
                                         if let Some(leaf) = leaf_chain.get(0) {
-                                            error!("Decide event for leaf: {}", *leaf.get_view_number());
+                                            error!(
+                                                "Decide event for leaf: {}",
+                                                *leaf.get_view_number()
+                                            );
                                             error!("Chain lenght = {}", leaf_chain.len());
                                         }
                                         // for leaf in leaf_chain {
