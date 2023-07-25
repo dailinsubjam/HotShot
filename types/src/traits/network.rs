@@ -157,6 +157,7 @@ pub enum ConsensusIntentEvent {
     CancelPollForViewSyncCertificate(u64),
 
     CancelPollForTransactions(u64),
+    CancelTransaction(u64, Vec<u8>),
 }
 
 impl ConsensusIntentEvent {
@@ -174,6 +175,7 @@ impl ConsensusIntentEvent {
             | ConsensusIntentEvent::PollForViewSyncCertificate(view_number) => *view_number,
             ConsensusIntentEvent::PollForTransactions(v) => *v,
             ConsensusIntentEvent::CancelPollForTransactions(v) => *v,
+            ConsensusIntentEvent::CancelTransaction(v, _) => *v,
         }
     }
 }

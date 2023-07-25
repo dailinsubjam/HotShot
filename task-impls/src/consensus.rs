@@ -868,9 +868,16 @@ where
 
                             // warn!("Inserting leaf into storage {:?}", leaf.commit());
                             // if *view % 10 == 0 && self.quorum_exchange.is_leader(view) {
-                                error!("Sending Decide for view {:?}", consensus.last_decided_view);
-                                error!("Decided txns len {:?}", included_txns_set.len());
+                            error!("Sending Decide for view {:?}", consensus.last_decided_view);
+                            error!("Decided txns len {:?}", included_txns_set.len());
                             // }
+                            if self.quorum_exchange.is_leader(consensus.last_decided_view) {
+                                for txn in included_txns_set {
+                                    self.quorum_exchange.network().inject_consensus_info(
+                                        ConsensusIntentEvent::CancelTransaction(*consensus.last_decided_view, txn);
+                                    );
+                                }
+                            }
                             decide_sent.await;
                         }
 

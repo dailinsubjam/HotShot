@@ -146,11 +146,17 @@ impl TxnTaskDescription {
                                         let api = HotShotSequencingConsensusApi {
                                             inner: node.handle.hotshot.inner.clone(),
                                         };
-                                        let result = api.send_transaction(DataMessage::SubmitTransaction(txn.clone(), TYPES::Time::new(0)))
+                                        let result = api
+                                            .send_transaction(DataMessage::SubmitTransaction(
+                                                txn.clone(),
+                                                TYPES::Time::new(0),
+                                            ))
                                             .await;
 
                                         if result.is_err() {
-                                            tracing::error!("Could not send transaction to web server");
+                                            tracing::error!(
+                                                "Could not send transaction to web server"
+                                            );
                                         }
                                         return (None, state);
                                     }

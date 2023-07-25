@@ -281,7 +281,11 @@ impl<
                     .direct_message(message.clone(), recipient.unwrap())
                     .await
             }
-            TransmitType::Broadcast => self.channel.broadcast_message(message.clone(), membership).await,
+            TransmitType::Broadcast => {
+                self.channel
+                    .broadcast_message(message.clone(), membership)
+                    .await
+            }
         };
 
         match transmit_result {

@@ -429,11 +429,11 @@ where
                     .await;
                 if !self.committee_exchange.is_leader(self.cur_view + 3) {
                     self.committee_exchange
-                    .network()
-                    .inject_consensus_info(
-                        (ConsensusIntentEvent::PollForTransactions(*self.cur_view + 3)),
-                    )
-                    .await;
+                        .network()
+                        .inject_consensus_info(
+                            (ConsensusIntentEvent::PollForTransactions(*self.cur_view + 3)),
+                        )
+                        .await;
                 }
 
                 // TODO ED Make this a new task so it doesn't block main DA task
