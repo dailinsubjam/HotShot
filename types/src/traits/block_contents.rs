@@ -56,6 +56,7 @@ pub trait Block:
     /// returns hashes of all the transactions in this block
     /// TODO make this ordered with a vec
     fn contained_transactions(&self) -> HashSet<Commitment<Self::Transaction>>;
+    fn contained_transactions_raw(&self) -> Vec<Self::Transaction>;
 }
 
 /// Commitment to a block, used by data availibity
@@ -152,6 +153,9 @@ pub mod dummy {
 
         fn contained_transactions(&self) -> HashSet<Commitment<Self::Transaction>> {
             HashSet::new()
+        }
+        fn contained_transactions_raw(&self) -> Vec<Self::Transaction> {
+            Vec::new()
         }
     }
 

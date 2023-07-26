@@ -504,6 +504,12 @@ impl Block for VDemoBlock {
                 .collect(),
         }
     }
+    fn contained_transactions_raw(&self) -> Vec<Self::Transaction> {
+        match self {
+            VDemoBlock::Genesis(_) => Vec::new(),
+            VDemoBlock::Normal(n) => n.transactions.clone(),
+        }
+    }
 }
 
 /// Implementation of [`NodeType`] for [`VDemoNode`]

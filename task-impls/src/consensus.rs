@@ -736,6 +736,7 @@ where
                         let mut new_decide_qc = None;
                         let mut leaf_views = Vec::new();
                         let mut included_txns = HashSet::new();
+                        let mut txns_list = Vec::new();
                         let old_anchor_view = consensus.last_decided_view;
                         let parent_view = leaf.justify_qc.view_number;
                         let mut current_chain_length = 0usize;
@@ -783,10 +784,12 @@ where
                                     leaf_views.push(leaf.clone());
                                     match &leaf.deltas {
                                         Left(block) => {
-                                        let txns = block.contained_transactions();
-                                        for txn in txns {
-                                            included_txns.insert(txn);
+                                        let hashes = block.contained_transactions();
+                                        for hash in hashes {
+                                            included_txns.insert(hash);
                                         }
+                                        let mut txns = block.contained_transactions_raw();
+                                        txns_list.append(&mut txns);
                                     }
                                     Right(commit) => {
 
@@ -872,11 +875,13 @@ where
                             error!("Decided txns len {:?}", included_txns_set.len());
                             // }
                             if self.quorum_exchange.is_leader(consensus.last_decided_view) {
-                                for txn in included_txns_set {
-                                    self.quorum_exchange.network().inject_consensus_info(
-                                        ConsensusIntentEvent::CancelTransaction(*consensus.last_decided_view, txn);
-                                    );
-                                }
+                                let txn_bytes: Vec<_> = txns_list
+                                    .into_iter()
+                                    .map(|txn| bincode_opts().serialize(&txn).unwrap())
+                                    .collect();
+                                self.committee_exchange.network().inject_consensus_info(
+                                    ConsensusIntentEvent::CancelTransaction(*consensus.last_decided_view, txn_bytes)
+                                ).await;
                             }
                             decide_sent.await;
                         }

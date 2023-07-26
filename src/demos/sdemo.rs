@@ -230,6 +230,12 @@ impl Block for SDemoBlock {
                 .collect(),
         }
     }
+    fn contained_transactions_raw(&self) -> Vec<Self::Transaction> {
+        match self {
+            SDemoBlock::Genesis(_) => Vec::new(),
+            SDemoBlock::Normal(n) => n.transactions.clone(),
+        }
+    }
 }
 
 impl State for SDemoState {
