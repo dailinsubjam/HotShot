@@ -75,8 +75,8 @@ Post a transaction to the web server
 """
 
 # POST a transaction removal
-[route.postcompletedtransaction]
-PATH = ["transactionscomplet"]
+[route.postprunetransaction]
+PATH = ["prune_transaction"]
 METHOD = "POST"
 DOC = """
 Post a transaction removal to the web server

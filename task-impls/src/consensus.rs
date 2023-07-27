@@ -877,11 +877,15 @@ where
                             if self.quorum_exchange.is_leader(consensus.last_decided_view) {
                                 let txn_bytes: Vec<_> = txns_list
                                     .into_iter()
-                                    .map(|txn| bincode_opts().serialize(&txn).unwrap())
+                                    .map(|txn| bincode::serialize(&txn).unwrap())
                                     .collect();
-                                self.committee_exchange.network().inject_consensus_info(
-                                    ConsensusIntentEvent::CancelTransaction(*consensus.last_decided_view, txn_bytes)
-                                ).await;
+                                self.committee_exchange
+                                    .network()
+                                    .inject_consensus_info(ConsensusIntentEvent::CancelTransaction(
+                                        *consensus.last_decided_view,
+                                        txn_bytes,
+                                    ))
+                                    .await;
                             }
                             decide_sent.await;
                         }

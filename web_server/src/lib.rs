@@ -5,8 +5,10 @@ use async_lock::RwLock;
 use clap::Args;
 use futures::FutureExt;
 
+use bincode::Options as BincodeOptions;
 use hotshot_types::traits::signature_key::EncodedPublicKey;
 use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_utils::bincode::bincode_opts;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -20,7 +22,7 @@ use tide_disco::method::WriteState;
 use tide_disco::Api;
 use tide_disco::App;
 use tide_disco::StatusCode;
-use tracing::{error, info};
+use tracing::{error, warn, info};
 
 type State<KEY> = RwLock<WebServerState<KEY>>;
 type Error = ServerError;
@@ -138,7 +140,7 @@ pub trait WebServerDataSource<KEY> {
     fn post_da_certificate(&mut self, view_number: u64, cert: Vec<u8>) -> Result<(), Error>;
     fn post_transaction(&mut self, txn: Vec<u8>) -> Result<(), Error>;
     fn post_staketable(&mut self, key: Vec<u8>) -> Result<(), Error>;
-    fn post_completed_transaction(&mut self, block: Vec<u8>) -> Result<(), Error>;
+    fn post_completed_transaction(&mut self, txns: Vec<Vec<u8>>) -> Result<(), Error>;
     fn post_secret_proposal(&mut self, _view_number: u64, _proposal: Vec<u8>) -> Result<(), Error>;
     fn proposal(&self, view_number: u64) -> Option<(String, Vec<u8>)>;
 }
@@ -235,7 +237,7 @@ impl<KEY: SignatureKey> WebServerDataSource<KEY> for WebServerState<KEY> {
         }
 
         if !txns_to_return.is_empty() {
-            error!("Returning this many txs {}", txns_to_return.len());
+            // error!("Returning this many txs {}", txns_to_return.len());
             Ok(Some(txns_to_return))
         } else {
             Err(ServerError {
@@ -417,16 +419,16 @@ impl<KEY: SignatureKey> WebServerDataSource<KEY> for WebServerState<KEY> {
         }
     }
 
-    fn post_completed_transaction(&mut self, txn: Vec<u8>) -> Result<(), Error> {
-        if let Some(idx) = self.txn_lookup.remove(&txn) {
-            self.transactions.remove(&idx);
-            Ok(())
-        } else {
-            Err(ServerError {
-                status: StatusCode::BadRequest,
-                message: "Transaction Not Found".to_string(),
-            })
+    fn post_completed_transaction(&mut self, txns: Vec<Vec<u8>>) -> Result<(), Error> {
+        for txn in txns {
+            if let Some(idx) = self.txn_lookup.remove(&txn) {
+                error!("remving a txn");
+                self.transactions.remove(&idx);
+            } else {
+                error!("Transaction to remove not found");
+            }
         }
+        Ok(())
     }
 
     //KALEY TODO: this will be merged with post_proposal once it is fully working,
@@ -590,11 +592,11 @@ where
         }
         .boxed()
     })?
-    .post("postcompletedtransaction", |req, state| {
+    .post("postprunetransaction", |req, state| {
         async move {
-            //works one key at a time for now
-            let key = req.body_bytes();
-            state.post_completed_transaction(key)
+            let keys: Vec<Vec<u8>> = bincode::deserialize(&req.body_bytes()).unwrap();
+            error!("Trying to remove {} txns", keys.len());
+            state.post_completed_transaction(keys)
         }
         .boxed()
     })?

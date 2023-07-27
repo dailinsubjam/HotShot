@@ -1027,6 +1027,21 @@ impl<
                     Ok(())
                 }
             }
+            ConsensusIntentEvent::CancelTransaction(view_number, txns) => {
+                error!("Canceling transactions");
+                let result: Result<(), ClientError> = self
+                    .inner
+                    .client
+                    .post(&config::post_prune_transactions_route())
+                    .body_binary(&txns)
+                    .unwrap()
+                    .send()
+                    .await;
+                // error!("POST message error for endpoint {} is {:?}", &message.get_endpoint(), result.clone());
+                result.map_err(|_e| NetworkError::WebServer {
+                    source: WebServerNetworkError::ClientError,
+                })
+            }
 
             _ => panic!("Unexpected event!"),
         };
