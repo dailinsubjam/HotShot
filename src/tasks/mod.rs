@@ -388,7 +388,6 @@ where
             };
             let id = handle.hotshot.inner.id;
             async move {
-               
                 state.handle_messages(messages.0, id).await;
                 (None, state)
             }
