@@ -114,10 +114,21 @@ impl<
                     // <https://github.com/EspressoSystems/HotShot/issues/1428>
                     self.event_stream.publish(event).await;
                 }
+
+                MessageKind::Data(message) => match message {
+                    hotshot_types::message::DataMessage::SubmitTransaction(transaction, _) => {
+                        transactions.push(transaction)
+                    }
+                },
+                MessageKind::_Unreachable(_) => unimplemented!(),
             }
-            MessageKind::_Unreachable(_) => unimplemented!(),
-        };
-        self.event_stream.publish(event).await;
+        }
+        if !transactions.is_empty() {
+            error!("Transactions in network task are {}", transactions.len());
+            self.event_stream
+                .publish(SequencingHotShotEvent::TransactionsRecv(transactions))
+                .await;
+        }
     }
 }
 
