@@ -355,7 +355,7 @@ where
                     .await
                     .expect("Failed to receive broadcast messages"),
             );
-            async_sleep(Duration::new(0, 500)).await;
+            async_sleep(Duration::from_millis(10)).await;
             msgs
         };
         boxed_sync(closure)
@@ -370,7 +370,8 @@ where
                     .await
                     .expect("Failed to receive direct messages"),
             );
-            async_sleep(Duration::new(0, 500)).await;
+            async_sleep(Duration::from_millis(10)).await;
+
             msgs
         };
         boxed_sync(closure)
