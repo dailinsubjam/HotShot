@@ -20,7 +20,7 @@ use tide_disco::method::WriteState;
 use tide_disco::Api;
 use tide_disco::App;
 use tide_disco::StatusCode;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 type State<KEY> = RwLock<WebServerState<KEY>>;
 type Error = ServerError;
@@ -172,7 +172,10 @@ impl<KEY: SignatureKey> WebServerDataSource<KEY> for WebServerState<KEY> {
     }
     /// Stores a received proposal in the `WebServerState`
     fn post_proposal(&mut self, view_number: u64, mut proposal: Vec<u8>) -> Result<(), Error> {
-        error!("Received proposal for view {}", view_number);
+        // Keeping this at `warn` level so we can ensure the web server is working properly
+        if view_number % 10 == 0 {
+            warn!("Received proposal for view {}", view_number);
+        }
 
         // Only keep proposal history for MAX_VIEWS number of view
         if self.proposals.len() >= MAX_VIEWS {

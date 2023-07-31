@@ -310,12 +310,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> HotShot<TYPES::ConsensusType
         );
         if let Some(chan) = send_next_leader {
             if chan.send(msg.clone().into()).await.is_err() {
-                warn!("Error timing out next leader task");
+                info!("Error timing out next leader task");
             }
         };
         // NOTE this should always exist
         if send_replica.send(msg.into()).await.is_err() {
-            warn!("Error timing out replica task");
+            info!("Error timing out replica task");
         };
     }
 
@@ -737,7 +737,7 @@ where
 
                 // skip if the proposal is stale
                 if msg_time < channel_map.cur_view {
-                    warn!(
+                    info!(
                         "Throwing away {} for view number: {:?}",
                         std::any::type_name::<Proposal<QuorumProposalType<TYPES, I>>>(),
                         msg_time
@@ -799,7 +799,7 @@ where
                     .quorum_exchange()
                     .is_leader(msg_time + 1);
                 if !is_leader || msg_time < channel_map.cur_view {
-                    warn!(
+                    info!(
                         "Throwing away {} message for view number: {:?}",
                         std::any::type_name::<QuorumVote<TYPES, I::Leaf>>(),
                         msg_time
@@ -973,7 +973,7 @@ where
 
                         // skip if the proposal is stale
                         if msg_time < channel_map.cur_view {
-                            warn!(
+                            info!(
                                 "Throwing away {} for view number: {:?}",
                                 std::any::type_name::<Proposal<QuorumProposalType<TYPES, I>>>(),
                                 msg_time
@@ -1020,7 +1020,7 @@ where
 
                         // skip if the proposal is stale
                         if msg_time < channel_map.cur_view {
-                            warn!(
+                            info!(
                                 "Throwing away {} for view number: {:?}",
                                 std::any::type_name::<Proposal<DAProposal<TYPES>>>(),
                                 msg_time
@@ -1079,7 +1079,7 @@ where
                         .quorum_exchange()
                         .is_leader(msg_time + 1);
                     if !is_leader || msg_time < channel_map.cur_view {
-                        warn!(
+                        info!(
                             "Throwing away {} message for view number: {:?}",
                             std::any::type_name::<QuorumVote<TYPES, I::Leaf>>(),
                             msg_time
@@ -1115,7 +1115,7 @@ where
                             .committee_exchange()
                             .is_leader(msg_time);
                         if !is_leader || msg_time < channel_map.cur_view {
-                            warn!(
+                            info!(
                                 "Throwing away {} message for view number: {:?}, Channel cur view: {:?} Is leader: {}",
                                 std::any::type_name::<DAVote<TYPES, I::Leaf>>(),
                                 msg_time,

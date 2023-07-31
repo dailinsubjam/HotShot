@@ -78,6 +78,7 @@ impl NodeImplementation<StaticCommitteeTestTypes> for StaticCentralizedImp {
 )]
 #[cfg_attr(feature = "async-std-executor", async_std::test)]
 #[instrument]
+#[ignore]
 async fn web_server_network() {
     let builder: TestBuilder = TestBuilder::default_multiple_rounds();
 

@@ -154,7 +154,7 @@ impl TestBuilder {
                     round_start_delay: 25,
                     ..TimingData::default()
                 },
-                da_committee_size: 5,
+                da_committee_size: 10,
                 ..TestMetadata::default()
             },
             ..TestBuilder::default()
